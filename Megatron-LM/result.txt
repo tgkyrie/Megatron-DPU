@@ -1,0 +1,477 @@
+root@server2:/workspace/Megatron-LM# torchrun --nproc_per_node=1 --nnodes=$NNODES --node_rank=$NODE_RANK \
+  --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \
+  pretrain_gpt.py \
+  --num-layers 12 \
+  --hidden-size 768 \
+  --num-attention-heads 12 \
+  --micro-batch-size 8 \
+  --global-batch-size 16 \
+  --max-position-embeddings 512\
+  --seq-length 512 \
+  --vocab-size 50257 \
+  --vocab-file ../vocab/vocab.json \
+  --merge-file ../vocab/merges.txt \
+  --tensor-model-parallel-size 2 \
+  --pipeline-model-parallel-size 1 \
+  --transformer-impl local \
+  --no-persist-layer-norm \
+  --mock-data \
+  --train-iters 50 \
+  --lr 0.00015 \
+  --min-lr 1.0e-5 \
+  --lr-decay-style cosine \
+  --distributed-backend nccl \
+  --recompute-granularity full 
+
+/opt/conda/lib/python3.10/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'repr' attribute with value False was provided to the `Field()` function, which has no effect in the context it was used. 'repr' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
+  warnings.warn(
+/opt/conda/lib/python3.10/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'frozen' attribute with value True was provided to the `Field()` function, which has no effect in the context it was used. 'frozen' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
+  warnings.warn(
+/workspace/Megatron-LM/megatron/core/models/backends.py:21: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn("Apex is not installed. Falling back to Torch Norm")
+fused_indices_to_multihot has reached end of life. Please migrate to a non-experimental function.
+/workspace/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:67: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn("Apex is not installed. Falling back to Torch Norm")
+/workspace/Megatron-LM/megatron/core/models/retro/encoder_spec.py:49: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn(f'Apex is not installed. Falling back to Torch Norm')
+/workspace/Megatron-LM/megatron/core/models/retro/decoder_spec.py:39: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn(f"Apex is not installed. Falling back to Torch Norm")
+/workspace/Megatron-LM/megatron/core/optimizer/__init__.py:22: UserWarning: Transformer Engine and Apex are not installed. Falling back to Torch optimizers.
+  warnings.warn(
+/workspace/Megatron-LM/megatron/core/models/gpt/heterogeneous/heterogeneous_layer_specs.py:63: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn("Apex is not installed. Falling back to Torch Norm")
+WARNING: one_logger package is required to enable e2e metrics tracking. please go to https://confluence.nvidia.com/display/MLWFO/Package+Repositories for details to install it
+server2:7443:7443 [0] NCCL INFO cudaDriverVersion 12080
+server2:7443:7443 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ens3f0np0
+server2:7443:7443 [0] NCCL INFO Bootstrap : Using ens3f0np0:172.16.200.2<0>
+server2:7443:7443 [0] NCCL INFO NET/Plugin : dlerror=libnccl-net.so: cannot open shared object file: No such file or directory No plugin found (libnccl-net.so), using internal implementation
+server2:7443:7542 [0] NCCL INFO NCCL_IB_DISABLE set by environment to 0.
+server2:7443:7542 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to ens3f0np0
+server2:7443:7542 [0] NCCL INFO NCCL_IB_HCA set to mlx5_0
+server2:7443:7542 [0] NCCL INFO NET/IB : Using [0]mlx5_0:1/RoCE [RO]; OOB ens3f0np0:172.16.200.2<0>
+server2:7443:7542 [0] NCCL INFO Using non-device net plugin version 0
+server2:7443:7542 [0] NCCL INFO Using network IB
+server2:7443:7542 [0] NCCL INFO comm 0x420274d0 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0x64c43791c959b80d - Init START
+server2:7443:7542 [0] NCCL INFO Setting affinity for GPU 0 to 0fff,ffffffff
+server2:7443:7542 [0] NCCL INFO Trees [0] -1/-1/-1->1->0 [1] 0/-1/-1->1->-1
+server2:7443:7542 [0] NCCL INFO P2P Chunksize set to 131072
+server2:7443:7542 [0] NCCL INFO Channel 00/0 : 0[0] -> 1[0] [receive] via NET/IB/0
+server2:7443:7542 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[0] [receive] via NET/IB/0
+server2:7443:7542 [0] NCCL INFO Channel 00/0 : 1[0] -> 0[0] [send] via NET/IB/0
+server2:7443:7542 [0] NCCL INFO Channel 01/0 : 1[0] -> 0[0] [send] via NET/IB/0
+server2:7443:7544 [0] NCCL INFO NCCL_IB_GID_INDEX set by environment to 0.
+server2:7443:7542 [0] NCCL INFO Connected all rings
+server2:7443:7542 [0] NCCL INFO Connected all trees
+server2:7443:7542 [0] NCCL INFO threadThresholds 8/8/64 | 16/8/64 | 512 | 512
+server2:7443:7542 [0] NCCL INFO 2 coll channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+server2:7443:7542 [0] NCCL INFO comm 0x420274d0 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0x64c43791c959b80d - Init COMPLETE
+/workspace/Megatron-LM/megatron/core/transformer/transformer_config.py:958: UserWarning: If you are using transformer_engine as the transformer implementation, the core_attn is from transformer_engine and may be the fused version. For fused attention, you have no need to set 'core_attn' to recompute. Please check that the core_attn recompute is really needed.
+  warnings.warn(
+ > number of parameters on (tensor, pipeline) model parallel rank (1, 0): 62315520
+(min, max) time across ranks (ms):
+    model-and-optimizer-setup ......................: (54.22, 54.27)
+    train/valid/test-data-iterators-setup ..........: (1304.46, 1424.38)
+server2:7443:7558 [0] NCCL INFO Using non-device net plugin version 0
+server2:7443:7558 [0] NCCL INFO Using network IB
+server2:7443:7558 [0] NCCL INFO bootstrapSplit: rank 1 nranks 2 color 1530306504 key 1 prev 0 next 0 - DONE
+server2:7443:7558 [0] NCCL INFO comm 0x440e7a20 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0x25629ed999b19fbe - Init START
+server2:7443:7558 [0] NCCL INFO Setting affinity for GPU 0 to 0fff,ffffffff
+server2:7443:7558 [0] NCCL INFO Trees [0] -1/-1/-1->1->0 [1] 0/-1/-1->1->-1
+server2:7443:7558 [0] NCCL INFO P2P Chunksize set to 131072
+server2:7443:7558 [0] NCCL INFO Channel 00/0 : 0[0] -> 1[0] [receive] via NET/IB/0
+server2:7443:7558 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[0] [receive] via NET/IB/0
+server2:7443:7558 [0] NCCL INFO Channel 00/0 : 1[0] -> 0[0] [send] via NET/IB/0
+server2:7443:7558 [0] NCCL INFO Channel 01/0 : 1[0] -> 0[0] [send] via NET/IB/0
+server2:7443:7558 [0] NCCL INFO Connected all rings
+server2:7443:7558 [0] NCCL INFO Connected all trees
+server2:7443:7558 [0] NCCL INFO threadThresholds 8/8/64 | 16/8/64 | 512 | 512
+server2:7443:7558 [0] NCCL INFO 2 coll channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+server2:7443:7558 [0] NCCL INFO comm 0x440e7a20 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0x25629ed999b19fbe - Init COMPLETE
+NCCL version 2.19.3+cuda11.8
+server2:7443:7574 [0] NCCL INFO Using non-device net plugin version 0
+server2:7443:7574 [0] NCCL INFO Using network IB
+server2:7443:7574 [0] NCCL INFO comm 0x514ae800 rank 0 nranks 1 cudaDev 0 nvmlDev 0 busId 61000 commId 0x576dc1c6fe69c42a - Init START
+server2:7443:7574 [0] NCCL INFO Setting affinity for GPU 0 to 0fff,ffffffff
+server2:7443:7574 [0] NCCL INFO Channel 00/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 01/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 02/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 03/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 04/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 05/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 06/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 07/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 08/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 09/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 10/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 11/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 12/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 13/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 14/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 15/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 16/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 17/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 18/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 19/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 20/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 21/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 22/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 23/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 24/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 25/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 26/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 27/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 28/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 29/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 30/32 :    0
+server2:7443:7574 [0] NCCL INFO Channel 31/32 :    0
+server2:7443:7574 [0] NCCL INFO Trees [0] -1/-1/-1->0->-1 [1] -1/-1/-1->0->-1 [2] -1/-1/-1->0->-1 [3] -1/-1/-1->0->-1 [4] -1/-1/-1->0->-1 [5] -1/-1/-1->0->-1 [6] -1/-1/-1->0->-1 [7] -1/-1/-1->0->-1 [8] -1/-1/-1->0->-1 [9] -1/-1/-1->0->-1 [10] -1/-1/-1->0->-1 [11] -1/-1/-1->0->-1 [12] -1/-1/-1->0->-1 [13] -1/-1/-1->0->-1 [14] -1/-1/-1->0->-1 [15] -1/-1/-1->0->-1 [16] -1/-1/-1->0->-1 [17] -1/-1/-1->0->-1 [18] -1/-1/-1->0->-1 [19] -1/-1/-1->0->-1 [20] -1/-1/-1->0->-1 [21] -1/-1/-1->0->-1 [22] -1/-1/-1->0->-1 [23] -1/-1/-1->0->-1 [24] -1/-1/-1->0->-1 [25] -1/-1/-1->0->-1 [26] -1/-1/-1->0->-1 [27] -1/-1/-1->0->-1 [28] -1/-1/-1->0->-1 [29] -1/-1/-1->0->-1 [30] -1/-1/-1->0->-1 [31] -1/-1/-1->0->-1
+server2:7443:7574 [0] NCCL INFO P2P Chunksize set to 131072
+server2:7443:7574 [0] NCCL INFO Connected all rings
+server2:7443:7574 [0] NCCL INFO Connected all trees
+server2:7443:7574 [0] NCCL INFO 32 coll channels, 0 nvls channels, 32 p2p channels, 32 p2p channels per peer
+server2:7443:7574 [0] NCCL INFO comm 0x514ae800 rank 0 nranks 1 cudaDev 0 nvmlDev 0 busId 61000 commId 0x576dc1c6fe69c42a - Init COMPLETE
+server2:7443:7577 [0] NCCL INFO Using non-device net plugin version 0
+server2:7443:7577 [0] NCCL INFO Using network IB
+server2:7443:7577 [0] NCCL INFO bootstrapSplit: rank 1 nranks 2 color 1530306504 key 1 prev 0 next 0 - DONE
+server2:7443:7577 [0] NCCL INFO comm 0x520a9240 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0x25629ed999b19fbe - Init START
+server2:7443:7577 [0] NCCL INFO Setting affinity for GPU 0 to 0fff,ffffffff
+server2:7443:7577 [0] NCCL INFO Trees [0] -1/-1/-1->1->0 [1] 0/-1/-1->1->-1
+server2:7443:7577 [0] NCCL INFO P2P Chunksize set to 131072
+server2:7443:7577 [0] NCCL INFO Channel 00/0 : 0[0] -> 1[0] [receive] via NET/IB/0
+server2:7443:7577 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[0] [receive] via NET/IB/0
+server2:7443:7577 [0] NCCL INFO Channel 00/0 : 1[0] -> 0[0] [send] via NET/IB/0
+server2:7443:7577 [0] NCCL INFO Channel 01/0 : 1[0] -> 0[0] [send] via NET/IB/0
+server2:7443:7577 [0] NCCL INFO Connected all rings
+server2:7443:7577 [0] NCCL INFO Connected all trees
+server2:7443:7577 [0] NCCL INFO threadThresholds 8/8/64 | 16/8/64 | 512 | 512
+server2:7443:7577 [0] NCCL INFO 2 coll channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+server2:7443:7577 [0] NCCL INFO comm 0x520a9240 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0x25629ed999b19fbe - Init COMPLETE
+ [2025-10-14 05:47:09] iteration       10/      50 | consumed samples:          160 | elapsed time per iteration (ms): 805.4 | learning rate: 1.366312E-04 | global batch size:    16 | lm loss: 1.047433E+01 | loss scale: 1.0 | grad norm: 18.181 | number of skipped iterations:   0 | number of nan iterations:   0 |
+[Rank 1] (after 10 iterations) memory (MB) | allocated: 1027.89697265625 | max allocated: 3050.74755859375 | reserved: 3292.0 | max reserved: 3292.0
+ [2025-10-14 05:47:13] iteration       20/      50 | consumed samples:          320 | elapsed time per iteration (ms): 423.6 | learning rate: 1.016312E-04 | global batch size:    16 | lm loss: 8.918151E+00 | loss scale: 1.0 | grad norm: 5.732 | number of skipped iterations:   0 | number of nan iterations:   0 |
+ [2025-10-14 05:47:18] iteration       30/      50 | consumed samples:          480 | elapsed time per iteration (ms): 423.9 | learning rate: 5.836881E-05 | global batch size:    16 | lm loss: 7.767458E+00 | loss scale: 1.0 | grad norm: 4.388 | number of skipped iterations:   0 | number of nan iterations:   0 |
+ [2025-10-14 05:47:22] iteration       40/      50 | consumed samples:          640 | elapsed time per iteration (ms): 424.9 | learning rate: 2.336881E-05 | global batch size:    16 | lm loss: 6.861879E+00 | loss scale: 1.0 | grad norm: 3.241 | number of skipped iterations:   0 | number of nan iterations:   0 |
+ [2025-10-14 05:47:26] iteration       50/      50 | consumed samples:          800 | elapsed time per iteration (ms): 425.5 | learning rate: 1.000000E-05 | global batch size:    16 | lm loss: 6.433026E+00 | loss scale: 1.0 | grad norm: 2.773 | number of skipped iterations:   0 | number of nan iterations:   0 |
+(min, max) time across ranks (ms):
+    evaluate .......................................: (17688.98, 17689.02)
+----------------------------------------------------------------------------------------------------------------
+ validation loss at iteration 50 on validation set | lm loss value: 5.611594E+00 | lm loss PPL: 2.735800E+02 | 
+----------------------------------------------------------------------------------------------------------------
+(min, max) time across ranks (ms):
+    evaluate .......................................: (17104.75, 17104.97)
+----------------------------------------------------------------------------------------------------------
+ validation loss at iteration 50 on test set | lm loss value: 5.617059E+00 | lm loss PPL: 2.750792E+02 | 
+----------------------------------------------------------------------------------------------------------
+server2:7443:7575 [0] NCCL INFO [Service thread] Connection closed by localRank 0
+server2:7443:7443 [0] NCCL INFO comm 0x514ae800 rank 0 nranks 1 cudaDev 0 busId 61000 - Abort COMPLETE
+server2:7443:7578 [0] NCCL INFO [Service thread] Connection closed by localRank 0
+server2:7443:7443 [0] NCCL INFO comm 0x520a9240 rank 1 nranks 2 cudaDev 0 busId 61000 - Abort COMPLETE
+server2:7443:7559 [0] NCCL INFO [Service thread] Connection closed by localRank 0
+server2:7443:7443 [0] NCCL INFO comm 0x440e7a20 rank 1 nranks 2 cudaDev 0 busId 61000 - Abort COMPLETE
+server2:7443:7544 [0] NCCL INFO [Service thread] Connection closed by localRank 0
+server2:7443:7443 [0] NCCL INFO comm 0x420274d0 rank 1 nranks 2 cudaDev 0 busId 61000 - Abort COMPLETE
+root@server2:/workspace/Megatron-LM# 
+root@server2:/workspace/Megatron-LM# export NCCL_IB_DISABLE=1         
+export NCCL_SOCKET_IFNAME=eno1
+export GLOO_SOCKET_IFNAME=eno1
+root@server2:/workspace/Megatron-LM# 
+root@server2:/workspace/Megatron-LM# export MASTER_ADDR=172.16.50.1
+export MASTER_PORT=19013
+export NNODES=2
+export NODE_RANK=1
+export CUDA_VISIBLE_DEVICES=0
+root@server2:/workspace/Megatron-LM# 
+root@server2:/workspace/Megatron-LM# torchrun --nproc_per_node=1 --nnodes=$NNODES --node_rank=$NODE_RANK   --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT   pretrain_gpt.py   --num-layers 12   --hidden-size 768   --num-attention-heads 12   --micro-batch-size 8   --global-batch-size 16   --max-position-embeddings 512  --seq-length 512   --vocab-size 50257   --vocab-file ../vocab/vocab.json   --merge-file ../vocab/merges.txt   --tensor-model-parallel-size 2   --pipeline-model-parallel-size 1   --transformer-impl local   --no-persist-layer-norm   --mock-data   --train-iters 50   --lr 0.00015   --min-lr 1.0e-5   --lr-decay-style cosine   --distributed-backend nccl   --log-interval 10   --recompute-activations   --recompute-granularity full 
+/opt/conda/lib/python3.10/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'repr' attribute with value False was provided to the `Field()` function, which has no effect in the context it was used. 'repr' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
+  warnings.warn(
+/opt/conda/lib/python3.10/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'frozen' attribute with value True was provided to the `Field()` function, which has no effect in the context it was used. 'frozen' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
+  warnings.warn(
+/workspace/Megatron-LM/megatron/core/models/backends.py:21: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn("Apex is not installed. Falling back to Torch Norm")
+fused_indices_to_multihot has reached end of life. Please migrate to a non-experimental function.
+/workspace/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:67: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn("Apex is not installed. Falling back to Torch Norm")
+/workspace/Megatron-LM/megatron/core/models/retro/encoder_spec.py:49: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn(f'Apex is not installed. Falling back to Torch Norm')
+/workspace/Megatron-LM/megatron/core/models/retro/decoder_spec.py:39: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn(f"Apex is not installed. Falling back to Torch Norm")
+/workspace/Megatron-LM/megatron/core/optimizer/__init__.py:22: UserWarning: Transformer Engine and Apex are not installed. Falling back to Torch optimizers.
+  warnings.warn(
+/workspace/Megatron-LM/megatron/core/models/gpt/heterogeneous/heterogeneous_layer_specs.py:63: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn("Apex is not installed. Falling back to Torch Norm")
+WARNING: one_logger package is required to enable e2e metrics tracking. please go to https://confluence.nvidia.com/display/MLWFO/Package+Repositories for details to install it
+server2:7583:7583 [0] NCCL INFO cudaDriverVersion 12080
+server2:7583:7583 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to eno1
+server2:7583:7583 [0] NCCL INFO Bootstrap : Using eno1:172.16.50.2<0>
+server2:7583:7583 [0] NCCL INFO NET/Plugin : dlerror=libnccl-net.so: cannot open shared object file: No such file or directory No plugin found (libnccl-net.so), using internal implementation
+server2:7583:7682 [0] NCCL INFO NCCL_IB_DISABLE set by environment to 1.
+server2:7583:7682 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to eno1
+server2:7583:7682 [0] NCCL INFO NET/Socket : Using [0]eno1:172.16.50.2<0>
+server2:7583:7682 [0] NCCL INFO Using non-device net plugin version 0
+server2:7583:7682 [0] NCCL INFO Using network Socket
+server2:7583:7682 [0] NCCL INFO comm 0x348684b0 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0xa8c9619e016ab6ea - Init START
+server2:7583:7682 [0] NCCL INFO Setting affinity for GPU 0 to 0fff,ffffffff
+server2:7583:7682 [0] NCCL INFO Trees [0] -1/-1/-1->1->0 [1] 0/-1/-1->1->-1
+server2:7583:7682 [0] NCCL INFO P2P Chunksize set to 131072
+server2:7583:7682 [0] NCCL INFO Channel 00/0 : 0[0] -> 1[0] [receive] via NET/Socket/0
+server2:7583:7682 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[0] [receive] via NET/Socket/0
+server2:7583:7682 [0] NCCL INFO Channel 00/0 : 1[0] -> 0[0] [send] via NET/Socket/0
+server2:7583:7682 [0] NCCL INFO Channel 01/0 : 1[0] -> 0[0] [send] via NET/Socket/0
+server2:7583:7682 [0] NCCL INFO Connected all rings
+server2:7583:7682 [0] NCCL INFO Connected all trees
+server2:7583:7682 [0] NCCL INFO threadThresholds 8/8/64 | 16/8/64 | 512 | 512
+server2:7583:7682 [0] NCCL INFO 2 coll channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+server2:7583:7682 [0] NCCL INFO comm 0x348684b0 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0xa8c9619e016ab6ea - Init COMPLETE
+/workspace/Megatron-LM/megatron/core/transformer/transformer_config.py:958: UserWarning: If you are using transformer_engine as the transformer implementation, the core_attn is from transformer_engine and may be the fused version. For fused attention, you have no need to set 'core_attn' to recompute. Please check that the core_attn recompute is really needed.
+  warnings.warn(
+ > number of parameters on (tensor, pipeline) model parallel rank (1, 0): 62315520
+(min, max) time across ranks (ms):
+    model-and-optimizer-setup ......................: (54.47, 54.60)
+    train/valid/test-data-iterators-setup ..........: (1993.46, 2114.11)
+server2:7583:7697 [0] NCCL INFO Using non-device net plugin version 0
+server2:7583:7697 [0] NCCL INFO Using network Socket
+server2:7583:7697 [0] NCCL INFO bootstrapSplit: rank 1 nranks 2 color 1530306504 key 1 prev 0 next 0 - DONE
+server2:7583:7697 [0] NCCL INFO comm 0x36906090 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0xfa893f7900dc436d - Init START
+server2:7583:7697 [0] NCCL INFO Setting affinity for GPU 0 to 0fff,ffffffff
+server2:7583:7697 [0] NCCL INFO Trees [0] -1/-1/-1->1->0 [1] 0/-1/-1->1->-1
+server2:7583:7697 [0] NCCL INFO P2P Chunksize set to 131072
+server2:7583:7697 [0] NCCL INFO Channel 00/0 : 0[0] -> 1[0] [receive] via NET/Socket/0
+server2:7583:7697 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[0] [receive] via NET/Socket/0
+server2:7583:7697 [0] NCCL INFO Channel 00/0 : 1[0] -> 0[0] [send] via NET/Socket/0
+server2:7583:7697 [0] NCCL INFO Channel 01/0 : 1[0] -> 0[0] [send] via NET/Socket/0
+server2:7583:7697 [0] NCCL INFO Connected all rings
+server2:7583:7697 [0] NCCL INFO Connected all trees
+server2:7583:7697 [0] NCCL INFO threadThresholds 8/8/64 | 16/8/64 | 512 | 512
+server2:7583:7697 [0] NCCL INFO 2 coll channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+server2:7583:7697 [0] NCCL INFO comm 0x36906090 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0xfa893f7900dc436d - Init COMPLETE
+NCCL version 2.19.3+cuda11.8
+server2:7583:7713 [0] NCCL INFO Using non-device net plugin version 0
+server2:7583:7713 [0] NCCL INFO Using network Socket
+server2:7583:7713 [0] NCCL INFO comm 0x43cc60f0 rank 0 nranks 1 cudaDev 0 nvmlDev 0 busId 61000 commId 0x70e50d2306be305c - Init START
+server2:7583:7713 [0] NCCL INFO Setting affinity for GPU 0 to 0fff,ffffffff
+server2:7583:7713 [0] NCCL INFO Channel 00/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 01/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 02/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 03/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 04/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 05/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 06/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 07/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 08/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 09/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 10/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 11/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 12/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 13/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 14/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 15/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 16/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 17/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 18/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 19/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 20/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 21/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 22/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 23/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 24/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 25/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 26/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 27/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 28/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 29/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 30/32 :    0
+server2:7583:7713 [0] NCCL INFO Channel 31/32 :    0
+server2:7583:7713 [0] NCCL INFO Trees [0] -1/-1/-1->0->-1 [1] -1/-1/-1->0->-1 [2] -1/-1/-1->0->-1 [3] -1/-1/-1->0->-1 [4] -1/-1/-1->0->-1 [5] -1/-1/-1->0->-1 [6] -1/-1/-1->0->-1 [7] -1/-1/-1->0->-1 [8] -1/-1/-1->0->-1 [9] -1/-1/-1->0->-1 [10] -1/-1/-1->0->-1 [11] -1/-1/-1->0->-1 [12] -1/-1/-1->0->-1 [13] -1/-1/-1->0->-1 [14] -1/-1/-1->0->-1 [15] -1/-1/-1->0->-1 [16] -1/-1/-1->0->-1 [17] -1/-1/-1->0->-1 [18] -1/-1/-1->0->-1 [19] -1/-1/-1->0->-1 [20] -1/-1/-1->0->-1 [21] -1/-1/-1->0->-1 [22] -1/-1/-1->0->-1 [23] -1/-1/-1->0->-1 [24] -1/-1/-1->0->-1 [25] -1/-1/-1->0->-1 [26] -1/-1/-1->0->-1 [27] -1/-1/-1->0->-1 [28] -1/-1/-1->0->-1 [29] -1/-1/-1->0->-1 [30] -1/-1/-1->0->-1 [31] -1/-1/-1->0->-1
+server2:7583:7713 [0] NCCL INFO P2P Chunksize set to 131072
+server2:7583:7713 [0] NCCL INFO Connected all rings
+server2:7583:7713 [0] NCCL INFO Connected all trees
+server2:7583:7713 [0] NCCL INFO 32 coll channels, 0 nvls channels, 32 p2p channels, 32 p2p channels per peer
+server2:7583:7713 [0] NCCL INFO comm 0x43cc60f0 rank 0 nranks 1 cudaDev 0 nvmlDev 0 busId 61000 commId 0x70e50d2306be305c - Init COMPLETE
+server2:7583:7716 [0] NCCL INFO Using non-device net plugin version 0
+server2:7583:7716 [0] NCCL INFO Using network Socket
+server2:7583:7716 [0] NCCL INFO bootstrapSplit: rank 1 nranks 2 color 1530306504 key 1 prev 0 next 0 - DONE
+server2:7583:7716 [0] NCCL INFO comm 0x448e4970 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0xfa893f7900dc436d - Init START
+server2:7583:7716 [0] NCCL INFO Setting affinity for GPU 0 to 0fff,ffffffff
+server2:7583:7716 [0] NCCL INFO Trees [0] -1/-1/-1->1->0 [1] 0/-1/-1->1->-1
+server2:7583:7716 [0] NCCL INFO P2P Chunksize set to 131072
+server2:7583:7716 [0] NCCL INFO Channel 00/0 : 0[0] -> 1[0] [receive] via NET/Socket/0
+server2:7583:7716 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[0] [receive] via NET/Socket/0
+server2:7583:7716 [0] NCCL INFO Channel 00/0 : 1[0] -> 0[0] [send] via NET/Socket/0
+server2:7583:7716 [0] NCCL INFO Channel 01/0 : 1[0] -> 0[0] [send] via NET/Socket/0
+server2:7583:7716 [0] NCCL INFO Connected all rings
+server2:7583:7716 [0] NCCL INFO Connected all trees
+server2:7583:7716 [0] NCCL INFO threadThresholds 8/8/64 | 16/8/64 | 512 | 512
+server2:7583:7716 [0] NCCL INFO 2 coll channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+server2:7583:7716 [0] NCCL INFO comm 0x448e4970 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0xfa893f7900dc436d - Init COMPLETE
+ [2025-10-14 05:52:24] iteration       10/      50 | consumed samples:          160 | elapsed time per iteration (ms): 11501.2 | learning rate: 1.366312E-04 | global batch size:    16 | lm loss: 1.047433E+01 | loss scale: 1.0 | grad norm: 18.181 | number of skipped iterations:   0 | number of nan iterations:   0 |
+[Rank 1] (after 10 iterations) memory (MB) | allocated: 1028.02197265625 | max allocated: 3050.87255859375 | reserved: 3402.0 | max reserved: 3402.0
+ [2025-10-14 05:54:15] iteration       20/      50 | consumed samples:          320 | elapsed time per iteration (ms): 11140.6 | learning rate: 1.016312E-04 | global batch size:    16 | lm loss: 8.918151E+00 | loss scale: 1.0 | grad norm: 5.732 | number of skipped iterations:   0 | number of nan iterations:   0 |
+ [2025-10-14 05:56:06] iteration       30/      50 | consumed samples:          480 | elapsed time per iteration (ms): 11140.5 | learning rate: 5.836881E-05 | global batch size:    16 | lm loss: 7.767458E+00 | loss scale: 1.0 | grad norm: 4.388 | number of skipped iterations:   0 | number of nan iterations:   0 |
+ [2025-10-14 05:57:58] iteration       40/      50 | consumed samples:          640 | elapsed time per iteration (ms): 11140.9 | learning rate: 2.336881E-05 | global batch size:    16 | lm loss: 6.861879E+00 | loss scale: 1.0 | grad norm: 3.241 | number of skipped iterations:   0 | number of nan iterations:   0 |
+ [2025-10-14 05:59:49] iteration       50/      50 | consumed samples:          800 | elapsed time per iteration (ms): 11142.0 | learning rate: 1.000000E-05 | global batch size:    16 | lm loss: 6.433026E+00 | loss scale: 1.0 | grad norm: 2.773 | number of skipped iterations:   0 | number of nan iterations:   0 |
+(min, max) time across ranks (ms):
+    evaluate .......................................: (555818.66, 555820.01)
+----------------------------------------------------------------------------------------------------------------
+ validation loss at iteration 50 on validation set | lm loss value: 5.611594E+00 | lm loss PPL: 2.735800E+02 | 
+----------------------------------------------------------------------------------------------------------------
+(min, max) time across ranks (ms):
+    evaluate .......................................: (555162.72, 555166.44)
+----------------------------------------------------------------------------------------------------------
+ validation loss at iteration 50 on test set | lm loss value: 5.617059E+00 | lm loss PPL: 2.750792E+02 | 
+----------------------------------------------------------------------------------------------------------
+server2:7583:7714 [0] NCCL INFO [Service thread] Connection closed by localRank 0
+server2:7583:7583 [0] NCCL INFO comm 0x43cc60f0 rank 0 nranks 1 cudaDev 0 busId 61000 - Abort COMPLETE
+server2:7583:7717 [0] NCCL INFO [Service thread] Connection closed by localRank 0
+server2:7583:7583 [0] NCCL INFO comm 0x448e4970 rank 1 nranks 2 cudaDev 0 busId 61000 - Abort COMPLETE
+server2:7583:7698 [0] NCCL INFO [Service thread] Connection closed by localRank 0
+server2:7583:7583 [0] NCCL INFO comm 0x36906090 rank 1 nranks 2 cudaDev 0 busId 61000 - Abort COMPLETE
+server2:7583:7683 [0] NCCL INFO [Service thread] Connection closed by localRank 0
+server2:7583:7583 [0] NCCL INFO comm 0x348684b0 rank 1 nranks 2 cudaDev 0 busId 61000 - Abort COMPLETE
+root@server2:/workspace/Megatron-LM# 
+/opt/conda/lib/python3.10/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'repr' attribute with value False was provided to the `Field()` function, which has no effect in the context it was used. 'repr' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
+  warnings.warn(
+/opt/conda/lib/python3.10/site-packages/pydantic/_internal/_generate_schema.py:2249: UnsupportedFieldAttributeWarning: The 'frozen' attribute with value True was provided to the `Field()` function, which has no effect in the context it was used. 'frozen' is field-specific metadata, and can only be attached to a model field using `Annotated` metadata or by assignment. This may have happened because an `Annotated` type alias using the `type` statement was used, or if the `Field()` function was attached to a single member of a union type.
+  warnings.warn(
+/workspace/Megatron-LM/megatron/core/models/backends.py:21: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn("Apex is not installed. Falling back to Torch Norm")
+fused_indices_to_multihot has reached end of life. Please migrate to a non-experimental function.
+/workspace/Megatron-LM/megatron/core/models/gpt/gpt_layer_specs.py:67: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn("Apex is not installed. Falling back to Torch Norm")
+/workspace/Megatron-LM/megatron/core/models/retro/encoder_spec.py:49: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn(f'Apex is not installed. Falling back to Torch Norm')
+/workspace/Megatron-LM/megatron/core/models/retro/decoder_spec.py:39: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn(f"Apex is not installed. Falling back to Torch Norm")
+/workspace/Megatron-LM/megatron/core/optimizer/__init__.py:22: UserWarning: Transformer Engine and Apex are not installed. Falling back to Torch optimizers.
+  warnings.warn(
+/workspace/Megatron-LM/megatron/core/models/gpt/heterogeneous/heterogeneous_layer_specs.py:63: UserWarning: Apex is not installed. Falling back to Torch Norm
+  warnings.warn("Apex is not installed. Falling back to Torch Norm")
+WARNING: one_logger package is required to enable e2e metrics tracking. please go to https://confluence.nvidia.com/display/MLWFO/Package+Repositories for details to install it
+server2:7723:7723 [0] NCCL INFO cudaDriverVersion 12080
+server2:7723:7723 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to eno1
+server2:7723:7723 [0] NCCL INFO Bootstrap : Using eno1:172.16.50.2<0>
+server2:7723:7723 [0] NCCL INFO NET/Plugin : dlerror=libnccl-net.so: cannot open shared object file: No such file or directory No plugin found (libnccl-net.so), using internal implementation
+server2:7723:7822 [0] NCCL INFO NCCL_IB_DISABLE set by environment to 1.
+server2:7723:7822 [0] NCCL INFO NCCL_SOCKET_IFNAME set by environment to eno1
+server2:7723:7822 [0] NCCL INFO NET/Socket : Using [0]eno1:172.16.50.2<0>
+server2:7723:7822 [0] NCCL INFO Using non-device net plugin version 0
+server2:7723:7822 [0] NCCL INFO Using network Socket
+server2:7723:7822 [0] NCCL INFO comm 0x3dfef830 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0x319f207393e132eb - Init START
+server2:7723:7822 [0] NCCL INFO Setting affinity for GPU 0 to 0fff,ffffffff
+server2:7723:7822 [0] NCCL INFO Trees [0] -1/-1/-1->1->0 [1] 0/-1/-1->1->-1
+server2:7723:7822 [0] NCCL INFO P2P Chunksize set to 131072
+server2:7723:7822 [0] NCCL INFO Channel 00/0 : 0[0] -> 1[0] [receive] via NET/Socket/0
+server2:7723:7822 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[0] [receive] via NET/Socket/0
+server2:7723:7822 [0] NCCL INFO Channel 00/0 : 1[0] -> 0[0] [send] via NET/Socket/0
+server2:7723:7822 [0] NCCL INFO Channel 01/0 : 1[0] -> 0[0] [send] via NET/Socket/0
+server2:7723:7822 [0] NCCL INFO Connected all rings
+server2:7723:7822 [0] NCCL INFO Connected all trees
+server2:7723:7822 [0] NCCL INFO threadThresholds 8/8/64 | 16/8/64 | 512 | 512
+server2:7723:7822 [0] NCCL INFO 2 coll channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+server2:7723:7822 [0] NCCL INFO comm 0x3dfef830 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0x319f207393e132eb - Init COMPLETE
+(min, max) time across ranks (ms):
+    model-and-optimizer-setup ......................: (56.37, 56.50)
+    train/valid/test-data-iterators-setup ..........: (1906.07, 1927.19)
+NCCL version 2.19.3+cuda11.8
+server2:7723:7994 [0] NCCL INFO Using non-device net plugin version 0
+server2:7723:7994 [0] NCCL INFO Using network Socket
+server2:7723:7994 [0] NCCL INFO comm 0x40ce02b0 rank 0 nranks 1 cudaDev 0 nvmlDev 0 busId 61000 commId 0xec792b632a7896e5 - Init START
+server2:7723:7994 [0] NCCL INFO Setting affinity for GPU 0 to 0fff,ffffffff
+server2:7723:7994 [0] NCCL INFO Channel 00/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 01/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 02/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 03/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 04/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 05/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 06/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 07/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 08/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 09/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 10/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 11/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 12/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 13/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 14/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 15/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 16/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 17/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 18/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 19/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 20/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 21/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 22/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 23/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 24/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 25/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 26/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 27/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 28/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 29/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 30/32 :    0
+server2:7723:7994 [0] NCCL INFO Channel 31/32 :    0
+server2:7723:7994 [0] NCCL INFO Trees [0] -1/-1/-1->0->-1 [1] -1/-1/-1->0->-1 [2] -1/-1/-1->0->-1 [3] -1/-1/-1->0->-1 [4] -1/-1/-1->0->-1 [5] -1/-1/-1->0->-1 [6] -1/-1/-1->0->-1 [7] -1/-1/-1->0->-1 [8] -1/-1/-1->0->-1 [9] -1/-1/-1->0->-1 [10] -1/-1/-1->0->-1 [11] -1/-1/-1->0->-1 [12] -1/-1/-1->0->-1 [13] -1/-1/-1->0->-1 [14] -1/-1/-1->0->-1 [15] -1/-1/-1->0->-1 [16] -1/-1/-1->0->-1 [17] -1/-1/-1->0->-1 [18] -1/-1/-1->0->-1 [19] -1/-1/-1->0->-1 [20] -1/-1/-1->0->-1 [21] -1/-1/-1->0->-1 [22] -1/-1/-1->0->-1 [23] -1/-1/-1->0->-1 [24] -1/-1/-1->0->-1 [25] -1/-1/-1->0->-1 [26] -1/-1/-1->0->-1 [27] -1/-1/-1->0->-1 [28] -1/-1/-1->0->-1 [29] -1/-1/-1->0->-1 [30] -1/-1/-1->0->-1 [31] -1/-1/-1->0->-1
+server2:7723:7994 [0] NCCL INFO P2P Chunksize set to 131072
+server2:7723:7994 [0] NCCL INFO Connected all rings
+server2:7723:7994 [0] NCCL INFO Connected all trees
+server2:7723:7994 [0] NCCL INFO 32 coll channels, 0 nvls channels, 32 p2p channels, 32 p2p channels per peer
+server2:7723:7994 [0] NCCL INFO comm 0x40ce02b0 rank 0 nranks 1 cudaDev 0 nvmlDev 0 busId 61000 commId 0xec792b632a7896e5 - Init COMPLETE
+server2:7723:8009 [0] NCCL INFO Using non-device net plugin version 0
+server2:7723:8009 [0] NCCL INFO Using network Socket
+server2:7723:8009 [0] NCCL INFO bootstrapSplit: rank 1 nranks 2 color 1530306504 key 1 prev 0 next 0 - DONE
+server2:7723:8009 [0] NCCL INFO comm 0x4e0bd3a0 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0x414754cd69fe05b2 - Init START
+server2:7723:8009 [0] NCCL INFO Setting affinity for GPU 0 to 0fff,ffffffff
+server2:7723:8009 [0] NCCL INFO Trees [0] -1/-1/-1->1->0 [1] 0/-1/-1->1->-1
+server2:7723:8009 [0] NCCL INFO P2P Chunksize set to 131072
+server2:7723:8009 [0] NCCL INFO Channel 00/0 : 0[0] -> 1[0] [receive] via NET/Socket/0
+server2:7723:8009 [0] NCCL INFO Channel 01/0 : 0[0] -> 1[0] [receive] via NET/Socket/0
+server2:7723:8009 [0] NCCL INFO Channel 00/0 : 1[0] -> 0[0] [send] via NET/Socket/0
+server2:7723:8009 [0] NCCL INFO Channel 01/0 : 1[0] -> 0[0] [send] via NET/Socket/0
+server2:7723:8009 [0] NCCL INFO Connected all rings
+server2:7723:8009 [0] NCCL INFO Connected all trees
+server2:7723:8009 [0] NCCL INFO threadThresholds 8/8/64 | 16/8/64 | 512 | 512
+server2:7723:8009 [0] NCCL INFO 2 coll channels, 0 nvls channels, 2 p2p channels, 2 p2p channels per peer
+server2:7723:8009 [0] NCCL INFO comm 0x4e0bd3a0 rank 1 nranks 2 cudaDev 0 nvmlDev 0 busId 61000 commId 0x414754cd69fe05b2 - Init COMPLETE
+server2:7723:8013 [0] NCCL INFO Using non-device net plugin version 0
+server2:7723:8013 [0] NCCL INFO Using network Socket
+server2:7723:8013 [0] NCCL INFO comm 0x4ecccf90 rank 0 nranks 1 cudaDev 0 nvmlDev 0 busId 61000 commId 0x243937fa312e616f - Init START
+server2:7723:8013 [0] NCCL INFO Setting affinity for GPU 0 to 0fff,ffffffff
+server2:7723:8013 [0] NCCL INFO Channel 00/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 01/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 02/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 03/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 04/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 05/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 06/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 07/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 08/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 09/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 10/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 11/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 12/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 13/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 14/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 15/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 16/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 17/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 18/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 19/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 20/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 21/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 22/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 23/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 24/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 25/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 26/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 27/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 28/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 29/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 30/32 :    0
+server2:7723:8013 [0] NCCL INFO Channel 31/32 :    0
+server2:7723:8013 [0] NCCL INFO Trees [0] -1/-1/-1->0->-1 [1] -1/-1/-1->0->-1 [2] -1/-1/-1->0->-1 [3] -1/-1/-1->0->-1 [4] -1/-1/-1->0->-1 [5] -1/-1/-1->0->-1 [6] -1/-1/-1->0->-1 [7] -1/-1/-1->0->-1 [8] -1/-1/-1->0->-1 [9] -1/-1/-1->0->-1 [10] -1/-1/-1->0->-1 [11] -1/-1/-1->0->-1 [12] -1/-1/-1->0->-1 [13] -1/-1/-1->0->-1 [14] -1/-1/-1->0->-1 [15] -1/-1/-1->0->-1 [16] -1/-1/-1->0->-1 [17] -1/-1/-1->0->-1 [18] -1/-1/-1->0->-1 [19] -1/-1/-1->0->-1 [20] -1/-1/-1->0->-1 [21] -1/-1/-1->0->-1 [22] -1/-1/-1->0->-1 [23] -1/-1/-1->0->-1 [24] -1/-1/-1->0->-1 [25] -1/-1/-1->0->-1 [26] -1/-1/-1->0->-1 [27] -1/-1/-1->0->-1 [28] -1/-1/-1->0->-1 [29] -1/-1/-1->0->-1 [30] -1/-1/-1->0->-1 [31] -1/-1/-1->0->-1
+server2:7723:8013 [0] NCCL INFO P2P Chunksize set to 131072
+server2:7723:8013 [0] NCCL INFO Connected all rings
+server2:7723:8013 [0] NCCL INFO Connected all trees
+server2:7723:8013 [0] NCCL INFO 32 coll channels, 0 nvls channels, 32 p2p channels, 32 p2p channels per peer
+server2:7723:8013 [0] NCCL INFO comm 0x4ecccf90 rank 0 nranks 1 cudaDev 0 nvmlDev 0 busId 61000 commId 0x243937fa312e616f - Init COMPLETE
+ [2025-10-14 07:22:30] iteration       10/      50 | consumed samples:          160 | elapsed time per iteration (ms): 4903.8 | learning rate: 1.366312E-04 | global batch size:    16 | lm loss: 1.052869E+01 | loss scale: 1.0 | grad norm: 1.988 | number of skipped iterations:   0 | number of nan iterations:   0 |
+ [2025-10-14 07:23:16] iteration       20/      50 | consumed samples:          320 | elapsed time per iteration (ms): 4525.8 | learning rate: 1.016312E-04 | global batch size:    16 | lm loss: 8.804645E+00 | loss scale: 1.0 | grad norm: 7.187 | number of skipped iterations:   0 | number of nan iterations:   0 |
+ [2025-10-14 07:24:01] iteration       30/      50 | consumed samples:          480 | elapsed time per iteration (ms): 4527.1 | learning rate: 5.836881E-05 | global batch size:    16 | lm loss: 7.649984E+00 | loss scale: 1.0 | grad norm: 3.328 | number of skipped iterations:   0 | number of nan iterations:   0 |
