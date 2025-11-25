@@ -1,5 +1,5 @@
 # 基础镜像已包含 CUDA 11.8、cuDNN8、NCCL、PyTorch 2.2.2（cu118）
-FROM pytorch/pytorch:2.2.2-cuda11.8-cudnn8-devel
+FROM byteps-cu118:pt22
 
 ARG http_proxy
 ARG https_proxy
@@ -72,3 +72,12 @@ WORKDIR ${MEGA_PATH}
 RUN pip install -U pip setuptools wheel packaging ninja pybind11 -i https://mirrors.ustc.edu.cn/pypi/simple
 # RUN pip install --no-build-isolation -U "megatron-core[dev,mlm]" -i https://mirrors.ustc.edu.cn/pypi/simple 
 RUN pip install --no-build-isolation -e .
+
+# in GPU server run this
+RUN pip install -U "megatron-core[mlm]" -i https://mirrors.ustc.edu.cn/pypi/simple 
+
+COPY ./apex/ ${BYTEPS_BASE_PATH}/apex/ 
+COPY ./vocab/ ${BYTEPS_BASE_PATH}/apex/
+ 
+WORKDIR ${BYTEPS_BASE_PATH}
+RUN cd apex && python setup.py install --cuda_ext --cpp_ext

@@ -1,0 +1,10 @@
+FROM megatron-dpu:full
+
+ARG BASE_PATH=/usr/local
+ARG BYTEPS_PATH=$BASE_PATH/byteps
+ARG MEGA_PATH=$BASE_PATH/Megatron-LM
+
+COPY ./Megatron-LM/ ${BASE_PATH}/Megatron-LM/
+
+WORKDIR ${MEGA_PATH}
+RUN pip install --no-build-isolation -e .

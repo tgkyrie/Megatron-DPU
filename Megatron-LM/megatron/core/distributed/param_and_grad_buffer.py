@@ -12,6 +12,8 @@ from typing import Dict, List, Optional
 import torch
 from torch.distributed import _coalescing_manager
 
+import byteps.torch as bps
+
 import megatron.core.nccl_allocator as nccl_allocator
 from megatron.core import parallel_state
 from megatron.core.process_groups_config import ProcessGroupCollection
@@ -380,6 +382,38 @@ class _ParamAndGradBucketGroup:
             communication_group = self.intra_distributed_optimizer_instance_group
         else:
             communication_group = self.data_parallel_group
+        
+            # 如果开启了 BytePS 且未使用分布式优化器 → 用 BytePS 做 DP 梯度同步
+        if (not self.ddp_config.use_distributed_optimizer
+                and getattr(self.ddp_config, "use_byteps_for_grad_sync", False)):
+
+            # 先不支持 overlap，强行同步
+            assert not self.ddp_config.overlap_grad_reduce, \
+                "暂不支持 BytePS + overlap_grad_reduce，请先关闭 overlap_grad_reduce"
+
+            # 根据 average_in_collective 决定 BytePS 是做 SUM 还是 AVG
+            # 注意：上面已经做过 gradient_scaling_factor *= ，这里要保持语义一致
+            byteps_average = self.ddp_config.average_in_collective
+
+            # 遍历每个 bucket，同步 push_pull
+            for idx, bucket in enumerate(self.buckets):
+                # 为 BytePS 构造一个稳定的 name，确保所有 rank 一致
+                name = f"dp_bucket_{idx}"
+
+                # BytePS 返回的是新的 tensor，不是 in-place，要拷回去
+                reduced = bps.push_pull(
+                    bucket.grad_data,
+                    average=byteps_average,
+                    name=name,
+                    version=0,
+                    priority=0
+                )
+                bucket.grad_data.copy_(reduced)
+
+            # 整个操作是同步完成的，不存在异步 handle
+            self.grad_reduce_handle = None
+            return
+
 
         # Coalesce communication kernels across buckets in the bucket group.
         with stream_context, _coalescing_manager(communication_group, async_ops=async_op) as cm:
