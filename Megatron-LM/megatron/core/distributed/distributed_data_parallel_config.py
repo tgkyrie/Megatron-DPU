@@ -7,7 +7,7 @@ from typing import Optional
 @dataclass
 class DistributedDataParallelConfig:
     """Configuration for DistributedDataParallel."""
-    use_byteps_for_grad_sync: bool = True
+    use_dpu_reduce: bool = False
 
     grad_reduce_in_fp32: bool = False
     """If true, reduce grads in fp32."""

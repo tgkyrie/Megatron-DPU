@@ -11,6 +11,8 @@ from datetime import timedelta
 import numpy as np
 import torch
 
+import byteps.torch as bps
+
 from megatron.core import mpu, tensor_parallel
 from megatron.core.fusions.fused_bias_dropout import bias_dropout_add_fused_train
 from megatron.core.fusions.fused_bias_gelu import bias_gelu
@@ -103,6 +105,9 @@ def initialize_megatron(
             tensor_parallel.get_cuda_rng_tracker().set_states(state_dict['rng_tracker_states'])
 
     args = get_args()
+    if args.use_dpu_reduce:
+        bps.init()
+
     initialize_rerun_state_machine(
         state_save_func=state_save_func,
         state_restore_func=state_restore_func,

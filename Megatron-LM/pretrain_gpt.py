@@ -3,7 +3,6 @@
 """Pretrain and SFT GPT."""
 
 import torch
-import byteps.torch as bps
 from functools import partial
 from typing import List, Optional, Tuple
 from megatron.core import parallel_state
@@ -224,7 +223,6 @@ def train_valid_test_datasets_provider(train_val_test_num_samples, vp_stage=None
 
 if __name__ == "__main__":
 
-    bps.init()
     # Temporary for transition to core datasets
     train_valid_test_datasets_provider.is_distributed = True
 
