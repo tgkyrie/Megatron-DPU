@@ -385,7 +385,7 @@ class _ParamAndGradBucketGroup:
         
             # 如果开启了 BytePS 且未使用分布式优化器 → 用 BytePS 做 DP 梯度同步
         if (not self.ddp_config.use_distributed_optimizer
-                and getattr(self.ddp_config, "use_byteps_for_grad_sync", False)):
+                and getattr(self.ddp_config, "use_dpu_reduce", False)):
 
             # 先不支持 overlap，强行同步
             assert not self.ddp_config.overlap_grad_reduce, \
@@ -401,14 +401,16 @@ class _ParamAndGradBucketGroup:
                 name = f"dp_bucket_{idx}"
 
                 # BytePS 返回的是新的 tensor，不是 in-place，要拷回去
-                reduced = bps.push_pull(
-                    bucket.grad_data,
-                    average=byteps_average,
-                    name=name,
-                    version=0,
-                    priority=0
-                )
-                bucket.grad_data.copy_(reduced)
+                # reduced = bps.push_pull(
+                #     bucket.grad_data,
+                #     average=byteps_average,
+                #     name=name,
+                #     version=0,
+                #     priority=0
+                # )
+                # bucket.grad_data.copy_(reduced)
+                bps.push_pull_inplace(bucket.grad_data,average=byteps_average,name=name)
+
 
             # 整个操作是同步完成的，不存在异步 handle
             self.grad_reduce_handle = None
