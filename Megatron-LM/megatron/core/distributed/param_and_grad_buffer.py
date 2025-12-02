@@ -401,15 +401,15 @@ class _ParamAndGradBucketGroup:
                 name = f"dp_bucket_{idx}"
 
                 # BytePS 返回的是新的 tensor，不是 in-place，要拷回去
-                # reduced = bps.push_pull(
-                #     bucket.grad_data,
-                #     average=byteps_average,
-                #     name=name,
-                #     version=0,
-                #     priority=0
-                # )
-                # bucket.grad_data.copy_(reduced)
-                bps.push_pull_inplace(bucket.grad_data,average=byteps_average,name=name)
+                reduced = bps.push_pull(
+                    bucket.grad_data,
+                    average=byteps_average,
+                    name=name,
+                    version=0,
+                    priority=0
+                )
+                bucket.grad_data.copy_(reduced)
+                # bps.push_pull_inplace(bucket.grad_data,average=byteps_average,name=name)
 
 
             # 整个操作是同步完成的，不存在异步 handle
