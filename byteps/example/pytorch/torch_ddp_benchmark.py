@@ -1,14 +1,8 @@
 #!/usr/bin/env python3
 """
-PyTorch DDP synthetic benchmark，计时和输出形式对齐 BytePS synthetic benchmark。
-
-用法示例：
-  torchrun --nproc_per_node=8 ddp_synthetic_benchmark.py \
-    --model resnet50 --batch-size 32 \
-    --num-warmup-batches 10 --num-batches-per-iter 10 --num-iters 10 \
-    --profiler
+PyTorch DDP synthetic benchmark，格式与 BytePS 示例保持一致。
+可选 profiler（仅 rank0 记录 trace 与通信热点）。
 """
-
 import argparse
 import os
 import sys
@@ -16,8 +10,8 @@ import timeit
 
 import numpy as np
 import torch
-import torch.distributed as dist
 import torch.backends.cudnn as cudnn
+import torch.distributed as dist
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import models
@@ -25,51 +19,43 @@ from torchvision import models
 
 def parse_args():
     parser = argparse.ArgumentParser(
-        description='PyTorch DDP Synthetic Benchmark',
-        formatter_class=argparse.ArgumentDefaultsHelpFormatter
+        description="PyTorch DDP Synthetic Benchmark",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
-
-    parser.add_argument('--model', type=str, default='resnet50',
-                        help='model to benchmark')
-    parser.add_argument('--batch-size', type=int, default=32,
-                        help='input batch size')
-
-    parser.add_argument('--num-warmup-batches', type=int, default=10,
-                        help='number of warm-up batches that don\'t count towards benchmark')
-    parser.add_argument('--num-batches-per-iter', type=int, default=10,
-                        help='number of batches per benchmark iteration')
-    parser.add_argument('--num-iters', type=int, default=10,
-                        help='number of benchmark iterations')
-    parser.add_argument('--num-classes', type=int, default=1000,
-                        help='number of classes')
-
-    parser.add_argument('--no-cuda', action='store_true', default=False,
-                        help='disables CUDA training')
-
-    # 和 BytePS 脚本一样的 profiler 开关
-    parser.add_argument('--profiler', action='store_true', default=False,
-                        help='enable autograd profiler on rank 0，并导出 trace')
-    parser.add_argument('--trace-dir', type=str, default='./traces_ddp',
-                        help='profile 导出的目录（仅 rank0 会写入）')
-                        help='enable autograd profiler on rank 0，并导出 trace')
-    parser.add_argument('--trace-dir', type=str, default='./traces_ddp',
-                        help='profile 导出的目录（仅 rank0 会写入）')
-
+    parser.add_argument("--model", type=str, default="resnet50", help="model to benchmark")
+    parser.add_argument("--batch-size", type=int, default=32, help="input batch size")
+    parser.add_argument("--num-warmup-batches", type=int, default=10, help="warmup batches")
+    parser.add_argument("--num-batches-per-iter", type=int, default=10, help="batches per iter")
+    parser.add_argument("--num-iters", type=int, default=10, help="benchmark iterations")
+    parser.add_argument("--num-classes", type=int, default=1000, help="classes")
+    parser.add_argument("--no-cuda", action="store_true", default=False, help="disable CUDA")
+    parser.add_argument(
+        "--profiler",
+        action="store_true",
+        default=False,
+        help="enable autograd profiler on rank 0，并导出 trace",
+    )
+    parser.add_argument(
+        "--trace-dir",
+        type=str,
+        default="./traces_ddp",
+        help="profile 导出的目录（仅 rank0 会写入）",
+    )
     return parser.parse_args()
 
 
 def setup_ddp():
     if not dist.is_initialized():
-        dist.init_process_group(backend='nccl')
+        dist.init_process_group(backend="nccl")
     rank = dist.get_rank()
     world_size = dist.get_world_size()
-    local_rank = int(os.environ.get('LOCAL_RANK', 0))
+    local_rank = int(os.environ.get("LOCAL_RANK", 0))
     return rank, world_size, local_rank
 
 
 def main():
     args = parse_args()
-    args.cuda = not args.no_cuda and torch.cuda.is_available()
+    args.cuda = (not args.no_cuda) and torch.cuda.is_available()
 
     rank, world_size, local_rank = setup_ddp()
 
@@ -77,39 +63,31 @@ def main():
         torch.cuda.set_device(local_rank)
         cudnn.benchmark = True
 
-    # 标准模型
     model = getattr(models, args.model)(num_classes=args.num_classes)
     if args.cuda:
         model.cuda()
-
     optimizer = optim.SGD(model.parameters(), lr=0.01)
 
-    # DDP 包装
     ddp_model = torch.nn.parallel.DistributedDataParallel(
-        model,
-        device_ids=[local_rank] if args.cuda else None
+        model, device_ids=[local_rank] if args.cuda else None
     )
 
-    # ---- Fake data：结构仿照 BytePS synthetic benchmark ----
+    # fake data
     datasets = []
-    targets = []
     targets = []
     for _ in range(100):
         data = torch.rand(args.batch_size, 3, 224, 224)
-        # BytePS 脚本里写死 1000，这里保持一致
-        target = torch.LongTensor(args.batch_size).random_() % 1000
+        target = torch.randint(0, args.num_classes, (args.batch_size,))
         if args.cuda:
-            data, target = data.cuda(), target.cuda()
+            data = data.cuda(non_blocking=True)
+            target = target.cuda(non_blocking=True)
         datasets.append(data)
-        targets.append(target)
         targets.append(target)
     data_index = 0
 
     def benchmark_step():
         nonlocal data_index
-        nonlocal data_index
         data = datasets[data_index % len(datasets)]
-        target = targets[data_index % len(targets)]
         target = targets[data_index % len(targets)]
         data_index += 1
         optimizer.zero_grad()
@@ -118,62 +96,70 @@ def main():
         loss.backward()
         optimizer.step()
 
-    def log(s, nl=True):
-        if rank != 0:
-            return
-        print(s, end='\n' if nl else '')
-        sys.stdout.flush()
+    def log(msg):
+        if rank == 0:
+            print(msg)
+            sys.stdout.flush()
 
-    device = 'GPU' if args.cuda else 'CPU'
-    log('Model: %s' % args.model)
-    log('Batch size: %d' % args.batch_size)
-    log('Number of %ss: %d' % (device, world_size))
+    device = "GPU" if args.cuda else "CPU"
+    log(f"Model: {args.model}")
+    log(f"Batch size: {args.batch_size}")
+    log(f"Number of {device}s: {world_size}")
 
-    # ---- Warm-up：完全照 BytePS 写法 ----
-    log('Running warmup...')
+    log("Running warmup...")
     timeit.timeit(benchmark_step, number=args.num_warmup_batches)
 
-    # ---- Benchmark：完全对齐 BytePS 逻辑 ----
-    log('Running benchmark...')
+    log("Running benchmark...")
     img_secs = []
-    # 注意：沿用 BytePS 中的按位与写法（功能等价于 and）
-    enable_profiling = args.profiler & (rank == 0)
+    enable_profiling = args.profiler and (rank == 0)
 
-    prof = None
     if enable_profiling:
         from torch.profiler import profile, ProfilerActivity
-        activities = [ProfilerActivity.CPU]
+
+        acts = [ProfilerActivity.CPU]
         if args.cuda:
-            activities.append(ProfilerActivity.CUDA)
-        if rank == 0:
-            os.makedirs(args.trace_dir, exist_ok=True)
-        with profile(activities=activities, record_shapes=False, profile_memory=False, with_stack=False) as prof:
+            acts.append(ProfilerActivity.CUDA)
+        os.makedirs(args.trace_dir, exist_ok=True)
+        trace_path = os.path.join(args.trace_dir, "ddp_rank0_trace.json")
+
+        with profile(
+            activities=acts,
+            record_shapes=False,
+            profile_memory=False,
+            with_stack=False,
+        ) as prof:
             for x in range(args.num_iters):
                 t = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
                 img_sec = args.batch_size * args.num_batches_per_iter / t
-                log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
+                log(f"Iter #{x}: {img_sec:.1f} img/sec per {device}")
                 img_secs.append(img_sec)
-            if rank == 0:
-                trace_path = os.path.join(args.trace_dir, "ddp_rank0_trace.json")
-                prof.export_chrome_trace(trace_path)
-                nccl_rows = [e for e in prof.key_averages() if 'nccl' in e.key.lower() or 'all_reduce' in e.key.lower()]
-                log("---- Profiler (nccl/all_reduce related) ----")
-                for e in nccl_rows[:10]:
-                    log(f"{e.key}: cuda_time_total={e.cuda_time_total:.2f}us cpu_time_total={e.cpu_time_total:.2f}us")
+            prof.export_chrome_trace(trace_path)
+            nccl_rows = [
+                e
+                for e in prof.key_averages()
+                if ("nccl" in e.key.lower()) or ("all_reduce" in e.key.lower())
+            ]
+            log("---- Profiler (nccl/all_reduce related) ----")
+            for e in nccl_rows[:10]:
+                log(
+                    f"{e.key}: cuda_time_total={e.cuda_time_total:.2f}us "
+                    f"cpu_time_total={e.cpu_time_total:.2f}us"
+                )
     else:
         for x in range(args.num_iters):
             t = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
             img_sec = args.batch_size * args.num_batches_per_iter / t
-            log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
+            log(f"Iter #{x}: {img_sec:.1f} img/sec per {device}")
             img_secs.append(img_sec)
 
-    # ---- Results：同样照搬 BytePS 打印格式 ----
     img_sec_mean = np.mean(img_secs)
     img_sec_conf = 1.96 * np.std(img_secs)
-    log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
-    log('Total img/sec on %d %s(s): %.1f +-%.1f' %
-        (world_size, device, world_size * img_sec_mean, world_size * img_sec_conf))
+    log(f"Img/sec per {device}: {img_sec_mean:.1f} +- {img_sec_conf:.1f}")
+    log(
+        f"Total img/sec on {world_size} {device}(s): "
+        f"{world_size * img_sec_mean:.1f} +- {world_size * img_sec_conf:.1f}"
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
