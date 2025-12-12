@@ -45,13 +45,7 @@ def parse_args():
         "--no-trace",
         action="store_true",
         default=False,
-        help="开启 profiler 时不导出 json trace，只输出文本统计",
-    )
-    parser.add_argument(
-        "--nccl-stats-file",
-        type=str,
-        default=None,
-        help="nccl/all_reduce 统计输出文件路径（默认 trace_dir 下的 nccl_stats.txt）",
+        help="开启 profiler 时不导出 json trace，只输出控制台统计",
     )
     return parser.parse_args()
 
@@ -133,7 +127,6 @@ def main():
             acts.append(ProfilerActivity.CUDA)
         os.makedirs(args.trace_dir, exist_ok=True)
         trace_path = os.path.join(args.trace_dir, "ddp_rank0_trace.json")
-        stats_path = args.nccl_stats_file or os.path.join(args.trace_dir, "nccl_stats.txt")
 
         with profile(
             activities=acts,
@@ -163,10 +156,6 @@ def main():
                     f"cpu_time_total={e.cpu_time_total:.2f}us count={e.count}"
                 )
             log(f"Total nccl/all_reduce cuda_time={total_cuda:.2f}us cpu_time={total_cpu:.2f}us")
-            with open(stats_path, "w") as f:
-                f.write("Key\tCount\tcuda_time_total(us)\tcpu_time_total(us)\n")
-                for e in nccl_rows:
-                    f.write(f\"{e.key}\t{e.count}\t{e.cuda_time_total:.2f}\t{e.cpu_time_total:.2f}\\n\")
     else:
         for x in range(args.num_iters):
             t = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
