@@ -32,4 +32,19 @@ echo "[server] ROOT=${DMLC_PS_ROOT_URI}:${DMLC_PS_ROOT_PORT} "\
      "IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST} "\
      "ENGINE_THREAD=${BYTEPS_SERVER_ENGINE_THREAD}"
 
-exec python3 -m byteps.server
+# 捕捉 Ctrl+C/TERM，确保子进程被杀掉，端口释放
+python3 - <<'PY' &
+import byteps.server  # import 即启动
+PY
+PID=$!
+STOPPED=0
+cleanup() {
+  if [ $STOPPED -eq 1 ]; then return; fi
+  STOPPED=1
+  echo "[server] stopping"
+  kill -TERM $PID 2>/dev/null || true
+  wait $PID 2>/dev/null
+  exit 0
+}
+trap cleanup SIGINT SIGTERM
+wait $PID
