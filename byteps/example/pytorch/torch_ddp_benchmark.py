@@ -215,7 +215,6 @@ def main():
             acts.append(ProfilerActivity.CUDA)
         os.makedirs(args.trace_dir, exist_ok=True)
         trace_path = os.path.join(args.trace_dir, "ddp_rank0_trace.json")
-        stats_path = args.nccl_stats_file or os.path.join(args.trace_dir, "nccl_stats.txt")
 
         with profile(
             activities=acts,
