@@ -47,6 +47,19 @@ def parse_args():
         default=False,
         help="开启 profiler 时不导出 json trace，只输出控制台统计",
     )
+    parser.add_argument(
+        "--no-comm-log",
+        dest="comm_log",
+        action="store_false",
+        help="关闭逐次 allreduce 的通信日志（默认开启）",
+    )
+    parser.add_argument(
+        "--sync-comm",
+        action="store_true",
+        default=False,
+        help="通信改为同步等待，测纯通信时用；默认异步允许与计算重叠",
+    )
+    parser.set_defaults(comm_log=True)
     return parser.parse_args()
 
 
@@ -78,38 +91,7 @@ def main():
         model, device_ids=[local_rank] if args.cuda else None
     )
 
-    # # 记录每个 allreduce bucket 的通信字节数和耗时（始终开启，日志仅 rank0 输出）
-    # comm_state = {"iter": 0, "bucket": 0, "rank": rank, "bytes_sum": 0, "time_sum": 0.0, "bucket_count": 0}
-    # import time
-
-    # def log_hook(state, bucket):
-    #     start = time.time()
-    #     bytes_size = bucket.buffer().numel() * bucket.buffer().element_size()
-    #     bucket_id = state["bucket"]
-    #     state["bucket"] += 1
-    #     state["bytes_sum"] += bytes_size
-    #     state["bucket_count"] += 1
-    #     fut = dist.all_reduce(bucket.buffer(), async_op=True).get_future()
-
-    #     def _callback(fut):
-    #         dur_ms = (time.time() - start) * 1000
-    #         state["time_sum"] += dur_ms
-    #         if state["rank"] == 0:
-    #             print(
-    #                 f"[comm] rank={state['rank']} iter={state['iter']} bucket={bucket_id} "
-    #                 f"bytes={bytes_size} time_ms={dur_ms:.3f}"
-    #             )
-    #             sys.stdout.flush()
-    #         return fut.value()[0]
-
-    #     return fut.then(_callback)
-
-    # ddp_model.register_comm_hook(comm_state, log_hook)
-
-    import time
-    import threading
-
-    # 记录每个 allreduce bucket 的通信字节数和耗时（始终开启，日志仅 rank0 输出）
+    # 记录每个 allreduce bucket 的通信字节数和耗时（日志仅 rank0 输出，默认开启，可通过 --no-comm-log 关闭）
     comm_state = {
         "iter": 0,
         "bucket": 0,
@@ -118,43 +100,61 @@ def main():
         "time_sum": 0.0,
         "bucket_count": 0,
     }
-    _comm_lock = threading.Lock()
+    if args.comm_log:
+        import time
+        import threading
+        import torch.futures
 
-    def log_hook(state, bucket):
-        # 注意：这里的时间是“从 hook 触发到该 bucket allreduce 完成”的 wall time
-        start = time.time()
+        _comm_lock = threading.Lock()
 
-        bytes_size = bucket.buffer().numel() * bucket.buffer().element_size()
-
-        with _comm_lock:
-            bucket_id = state["bucket"]
-            state["bucket"] += 1
-            state["bytes_sum"] += bytes_size
-            state["bucket_count"] += 1
-
-        fut = dist.all_reduce(bucket.buffer(), async_op=True).get_future()
-
-        def _callback(fut):
-            dur_ms = (time.time() - start) * 1000.0
+        def log_hook(state, bucket):
+            start = time.time()
+            tensor = bucket.buffer()
+            bytes_size = tensor.numel() * tensor.element_size()
 
             with _comm_lock:
-                state["time_sum"] += dur_ms
+                bucket_id = state["bucket"]
+                state["bucket"] += 1
+                state["bytes_sum"] += bytes_size
+                state["bucket_count"] += 1
 
-            if state["rank"] == 0:
-                print(
-                    f"[comm] rank=0 iter={state['iter']} bucket={bucket_id} "
-                    f"bytes={bytes_size} time_ms={dur_ms:.3f}"
-                )
-                sys.stdout.flush()
+            if args.sync_comm:
+                # 同步通信：测纯通信时间，牺牲与计算重叠
+                dist.all_reduce(tensor, async_op=False)
+                if args.cuda:
+                    torch.cuda.synchronize()
+                dur_ms = (time.time() - start) * 1000.0
+                with _comm_lock:
+                    state["time_sum"] += dur_ms
+                if state["rank"] == 0:
+                    print(
+                        f"[comm] rank=0 iter={state['iter']} bucket={bucket_id} "
+                        f"bytes={bytes_size} time_ms={dur_ms:.3f}"
+                    )
+                    sys.stdout.flush()
+                fut = torch.futures.Future()
+                fut.set_result(tensor / dist.get_world_size())
+                return fut
 
-            # DDP 默认是 SUM 后再 / world_size，这里保持一致
-            t = fut.value()[0]
-            t.div_(dist.get_world_size())
-            return t
+            # 异步通信：保持默认的计算-通信重叠
+            fut = dist.all_reduce(tensor, async_op=True).get_future()
 
-        return fut.then(_callback)
+            def _cb(fut):
+                dur_ms = (time.time() - start) * 1000.0
+                with _comm_lock:
+                    state["time_sum"] += dur_ms
+                if state["rank"] == 0:
+                    print(
+                        f"[comm] rank=0 iter={state['iter']} bucket={bucket_id} "
+                        f"bytes={bytes_size} time_ms={dur_ms:.3f}"
+                    )
+                    sys.stdout.flush()
+                t = fut.value()[0] / dist.get_world_size()
+                return t
 
-    ddp_model.register_comm_hook(comm_state, log_hook)
+            return fut.then(_cb)
+
+        ddp_model.register_comm_hook(comm_state, log_hook)
 
 
     # fake data
