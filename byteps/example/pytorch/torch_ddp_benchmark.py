@@ -48,7 +48,9 @@ def parse_args():
 
     # 和 BytePS 脚本一样的 profiler 开关
     parser.add_argument('--profiler', action='store_true', default=False,
-                        help='enable autograd profiler on rank 0')
+                        help='enable autograd profiler on rank 0，并导出 trace')
+    parser.add_argument('--trace-dir', type=str, default='./traces_ddp',
+                        help='profile 导出的目录（仅 rank0 会写入）')
 
     return parser.parse_args()
 
@@ -86,8 +88,8 @@ def main():
     )
 
     # ---- Fake data：结构仿照 BytePS synthetic benchmark ----
-    global target
     datasets = []
+    targets = []
     for _ in range(100):
         data = torch.rand(args.batch_size, 3, 224, 224)
         # BytePS 脚本里写死 1000，这里保持一致
@@ -95,13 +97,13 @@ def main():
         if args.cuda:
             data, target = data.cuda(), target.cuda()
         datasets.append(data)
-    global data_index
+        targets.append(target)
     data_index = 0
 
     def benchmark_step():
-        global data_index, target
-
+        nonlocal data_index
         data = datasets[data_index % len(datasets)]
+        target = targets[data_index % len(targets)]
         data_index += 1
         optimizer.zero_grad()
         output = ddp_model(data)
@@ -130,7 +132,28 @@ def main():
     # 注意：沿用 BytePS 中的按位与写法（功能等价于 and）
     enable_profiling = args.profiler & (rank == 0)
 
-    with torch.autograd.profiler.profile(enabled=enable_profiling, use_cuda=True) as prof:
+    if enable_profiling:
+        from torch.profiler import profile, ProfilerActivity
+        activities = [ProfilerActivity.CPU]
+        if args.cuda:
+            activities.append(ProfilerActivity.CUDA)
+        if rank == 0:
+            os.makedirs(args.trace_dir, exist_ok=True)
+        with profile(activities=activities, record_shapes=False, profile_memory=False, with_stack=False) as prof:
+            for x in range(args.num_iters):
+                t = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
+                img_sec = args.batch_size * args.num_batches_per_iter / t
+                log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
+                img_secs.append(img_sec)
+            if rank == 0:
+                trace_path = os.path.join(args.trace_dir, "ddp_rank0_trace.json")
+                prof.export_chrome_trace(trace_path)
+                # 打印与通信相关的热点（过滤 nccl / all_reduce）
+                nccl_rows = [e for e in prof.key_averages() if 'nccl' in e.key.lower() or 'all_reduce' in e.key.lower()]
+                log("---- Profiler (nccl/all_reduce related) ----")
+                for e in nccl_rows[:10]:
+                    log(f"{e.key}: cuda_time_total={e.cuda_time_total:.2f}us cpu_time_total={e.cpu_time_total:.2f}us")
+    else:
         for x in range(args.num_iters):
             t = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
             img_sec = args.batch_size * args.num_batches_per_iter / t
