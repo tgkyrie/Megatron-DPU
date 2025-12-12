@@ -30,6 +30,11 @@ export NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-INIT,NET}
 export MASTER_ADDR MASTER_PORT
 export WORLD_SIZE RANK
 
+export NCCL_DEBUG=INFO
+export NCCL_DEBUG_SUBSYS=COLL,GRAPH,INIT,NET   # COLL 会打印每次 collective 的 count/bytes 和参与 rank
+export NCCL_DEBUG_FILE=./nccl.%h.%p.log     # 避免刷屏，各进程各写一个文件
+
+
 # 单进程单卡，本机就是 local_rank 0
 export LOCAL_RANK=${LOCAL_RANK:-0}
 
