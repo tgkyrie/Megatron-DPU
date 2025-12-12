@@ -78,33 +78,84 @@ def main():
         model, device_ids=[local_rank] if args.cuda else None
     )
 
-    # 记录每个 allreduce bucket 的通信字节数和耗时（始终开启，日志仅 rank0 输出）
-    comm_state = {"iter": 0, "bucket": 0, "rank": rank, "bytes_sum": 0, "time_sum": 0.0, "bucket_count": 0}
+    # # 记录每个 allreduce bucket 的通信字节数和耗时（始终开启，日志仅 rank0 输出）
+    # comm_state = {"iter": 0, "bucket": 0, "rank": rank, "bytes_sum": 0, "time_sum": 0.0, "bucket_count": 0}
+    # import time
+
+    # def log_hook(state, bucket):
+    #     start = time.time()
+    #     bytes_size = bucket.buffer().numel() * bucket.buffer().element_size()
+    #     bucket_id = state["bucket"]
+    #     state["bucket"] += 1
+    #     state["bytes_sum"] += bytes_size
+    #     state["bucket_count"] += 1
+    #     fut = dist.all_reduce(bucket.buffer(), async_op=True).get_future()
+
+    #     def _callback(fut):
+    #         dur_ms = (time.time() - start) * 1000
+    #         state["time_sum"] += dur_ms
+    #         if state["rank"] == 0:
+    #             print(
+    #                 f"[comm] rank={state['rank']} iter={state['iter']} bucket={bucket_id} "
+    #                 f"bytes={bytes_size} time_ms={dur_ms:.3f}"
+    #             )
+    #             sys.stdout.flush()
+    #         return fut.value()[0]
+
+    #     return fut.then(_callback)
+
+    # ddp_model.register_comm_hook(comm_state, log_hook)
+
     import time
+    import threading
+
+    # 记录每个 allreduce bucket 的通信字节数和耗时（始终开启，日志仅 rank0 输出）
+    comm_state = {
+        "iter": 0,
+        "bucket": 0,
+        "rank": rank,
+        "bytes_sum": 0,
+        "time_sum": 0.0,
+        "bucket_count": 0,
+    }
+    _comm_lock = threading.Lock()
 
     def log_hook(state, bucket):
+        # 注意：这里的时间是“从 hook 触发到该 bucket allreduce 完成”的 wall time
         start = time.time()
+
         bytes_size = bucket.buffer().numel() * bucket.buffer().element_size()
-        bucket_id = state["bucket"]
-        state["bucket"] += 1
-        state["bytes_sum"] += bytes_size
-        state["bucket_count"] += 1
+
+        with _comm_lock:
+            bucket_id = state["bucket"]
+            state["bucket"] += 1
+            state["bytes_sum"] += bytes_size
+            state["bucket_count"] += 1
+
         fut = dist.all_reduce(bucket.buffer(), async_op=True).get_future()
 
         def _callback(fut):
-            dur_ms = (time.time() - start) * 1000
-            state["time_sum"] += dur_ms
+            dur_ms = (time.time() - start) * 1000.0
+
+            with _comm_lock:
+                state["time_sum"] += dur_ms
+
             if state["rank"] == 0:
                 print(
-                    f"[comm] rank={state['rank']} iter={state['iter']} bucket={bucket_id} "
+                    f"[comm] rank=0 iter={state['iter']} bucket={bucket_id} "
                     f"bytes={bytes_size} time_ms={dur_ms:.3f}"
                 )
                 sys.stdout.flush()
-            return fut.value()[0]
+
+            # DDP 默认是 SUM 后再 / world_size，这里保持一致
+            t = fut.value()[0]
+            t.div_(dist.get_world_size())
+            return t
 
         return fut.then(_callback)
 
     ddp_model.register_comm_hook(comm_state, log_hook)
+
 
     # fake data
     datasets = []
@@ -169,6 +220,8 @@ def main():
                 comm_state["time_sum"] = 0.0
                 comm_state["bucket_count"] = 0
                 t = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
+                if args.cuda:
+                    torch.cuda.synchronize()
                 img_sec = args.batch_size * args.num_batches_per_iter / t
                 log(f"Iter #{x}: {img_sec:.1f} img/sec per {device}")
                 img_secs.append(img_sec)
@@ -202,6 +255,8 @@ def main():
             comm_state["time_sum"] = 0.0
             comm_state["bucket_count"] = 0
             t = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
+            if args.cuda:
+                torch.cuda.synchronize()
             img_sec = args.batch_size * args.num_batches_per_iter / t
             log(f"Iter #{x}: {img_sec:.1f} img/sec per {device}")
             img_secs.append(img_sec)
