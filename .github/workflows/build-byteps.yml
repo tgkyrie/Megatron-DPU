@@ -4,7 +4,7 @@ on:
   push:
     branches: [main, wpb_byteps]
     paths:
-      - "Dockerfile"
+      - "Dockerfile.byteps"
       - "byteps/**"
       - ".github/workflows/build-byteps.yml"
   workflow_dispatch:
@@ -45,8 +45,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
-          target: byteps
+          file: ./Dockerfile.byteps
           push: true
           tags: |
             ${{ env.IMAGE_BYTEPS }}:latest

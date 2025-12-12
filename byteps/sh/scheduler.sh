@@ -30,5 +30,19 @@ echo "[scheduler] ROOT=${DMLC_PS_ROOT_URI}:${DMLC_PS_ROOT_PORT} "\
      "NUM_WORKER=${DMLC_NUM_WORKER} NUM_SERVER=${DMLC_NUM_SERVER} "\
      "IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST}"
 
-# 用 exec 前台运行，保持输出，退出时不残留子进程占端口
-exec python3 -m byteps.server
+# 捕捉 Ctrl+C/TERM，确保子进程被杀掉，端口释放
+python3 - <<'PY' &
+import byteps.server  # import 即启动
+PY
+PID=$!
+STOPPED=0
+cleanup() {
+  if [ $STOPPED -eq 1 ]; then return; fi
+  STOPPED=1
+  echo "[scheduler] stopping"
+  kill -TERM $PID 2>/dev/null || true
+  wait $PID 2>/dev/null
+  exit 0
+}
+trap cleanup SIGINT SIGTERM
+wait $PID

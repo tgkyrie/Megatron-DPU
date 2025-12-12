@@ -1,0 +1,34 @@
+# Megatron 镜像，基于已构建的 BytePS 镜像
+ARG BYTEPS_IMAGE=byteps:latest
+FROM ${BYTEPS_IMAGE}
+
+ARG BYTEPS_BASE_PATH=/usr/local
+ARG MEGA_PATH=$BYTEPS_BASE_PATH/Megatron-LM
+
+WORKDIR ${BYTEPS_BASE_PATH}
+
+# Megatron 源码与 uv 脚本
+COPY ./Megatron-LM/ ${BYTEPS_BASE_PATH}/Megatron-LM/
+COPY ./uvinstall.sh ${BYTEPS_BASE_PATH}
+
+# 安装 uv（按 Megatron 文档）
+RUN chmod +x uvinstall.sh && ./uvinstall.sh
+
+ENV UV_PROJECT_ENVIRONMENT=./venv
+ENV PATH="$UV_PROJECT_ENVIRONMENT/bin:/root/.local/bin:$PATH"
+ENV UV_LINK_MODE=copy
+
+WORKDIR ${MEGA_PATH}
+RUN pip install -U pip setuptools wheel packaging ninja pybind11 -i https://mirrors.ustc.edu.cn/pypi/simple
+RUN pip install --no-build-isolation -e .
+# GPU 服务器上安装 Megatron-Core MLM 额外依赖
+RUN pip install -U "megatron-core[mlm]" -i https://mirrors.ustc.edu.cn/pypi/simple
+
+# 安装 apex 与 vocab
+RUN git clone --depth 1 https://github.com/NVIDIA/apex.git ${BYTEPS_BASE_PATH}/apex
+COPY ./vocab/ ${BYTEPS_BASE_PATH}/vocab/
+
+WORKDIR ${BYTEPS_BASE_PATH}
+RUN cd apex && python setup.py install --cuda_ext --cpp_ext
+
+CMD ["bash"]

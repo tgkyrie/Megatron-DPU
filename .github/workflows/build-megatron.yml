@@ -4,7 +4,8 @@ on:
   push:
     branches: [main, wpb_byteps]
     paths:
-      - "Dockerfile"
+      - "Dockerfile.megatron"
+      - "Dockerfile.byteps"
       - "Megatron-LM/**"
       - "apex/**"
       - "vocab/**"
@@ -48,8 +49,7 @@ jobs:
         uses: docker/build-push-action@v6
         with:
           context: .
-          file: ./Dockerfile
-          target: megatron
+          file: ./Dockerfile.megatron
           build-args: |
             BYTEPS_IMAGE=${{ env.IMAGE_BYTEPS }}:latest
           push: true

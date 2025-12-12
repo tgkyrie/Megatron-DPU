@@ -1,0 +1,5 @@
+.git
+.github
+byteps/sh/**
+!byteps/sh/*.sh
+Megatron-LM/.git
