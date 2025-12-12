@@ -78,6 +78,34 @@ def main():
         model, device_ids=[local_rank] if args.cuda else None
     )
 
+    # 记录每个 allreduce bucket 的通信字节数和耗时（始终开启，日志仅 rank0 输出）
+    comm_state = {"iter": 0, "bucket": 0, "rank": rank, "bytes_sum": 0, "time_sum": 0.0, "bucket_count": 0}
+    import time
+
+    def log_hook(state, bucket):
+        start = time.time()
+        bytes_size = bucket.buffer().numel() * bucket.buffer().element_size()
+        bucket_id = state["bucket"]
+        state["bucket"] += 1
+        state["bytes_sum"] += bytes_size
+        state["bucket_count"] += 1
+        fut = dist.all_reduce(bucket.buffer(), async_op=True).get_future()
+
+        def _callback(fut):
+            dur_ms = (time.time() - start) * 1000
+            state["time_sum"] += dur_ms
+            if state["rank"] == 0:
+                print(
+                    f"[comm] rank={state['rank']} iter={state['iter']} bucket={bucket_id} "
+                    f"bytes={bytes_size} time_ms={dur_ms:.3f}"
+                )
+                sys.stdout.flush()
+            return fut.value()[0]
+
+        return fut.then(_callback)
+
+    ddp_model.register_comm_hook(comm_state, log_hook)
+
     # fake data
     datasets = []
     targets = []
@@ -135,10 +163,20 @@ def main():
             with_stack=False,
         ) as prof:
             for x in range(args.num_iters):
+                comm_state["iter"] = x
+                comm_state["bucket"] = 0
+                comm_state["bytes_sum"] = 0
+                comm_state["time_sum"] = 0.0
+                comm_state["bucket_count"] = 0
                 t = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
                 img_sec = args.batch_size * args.num_batches_per_iter / t
                 log(f"Iter #{x}: {img_sec:.1f} img/sec per {device}")
                 img_secs.append(img_sec)
+                if rank == 0:
+                    print(
+                        f"[comm] iter={x} buckets={comm_state['bucket_count']} "
+                        f"total_bytes={comm_state['bytes_sum']} total_time_ms={comm_state['time_sum']:.3f}"
+                    )
         if rank == 0:
             if not args.no_trace:
                 prof.export_chrome_trace(trace_path)
@@ -158,10 +196,20 @@ def main():
             log(f"Total nccl/all_reduce cuda_time={total_cuda:.2f}us cpu_time={total_cpu:.2f}us")
     else:
         for x in range(args.num_iters):
+            comm_state["iter"] = x
+            comm_state["bucket"] = 0
+            comm_state["bytes_sum"] = 0
+            comm_state["time_sum"] = 0.0
+            comm_state["bucket_count"] = 0
             t = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
             img_sec = args.batch_size * args.num_batches_per_iter / t
             log(f"Iter #{x}: {img_sec:.1f} img/sec per {device}")
             img_secs.append(img_sec)
+            if rank == 0:
+                print(
+                    f"[comm] iter={x} buckets={comm_state['bucket_count']} "
+                    f"total_bytes={comm_state['bytes_sum']} total_time_ms={comm_state['time_sum']:.3f}"
+                )
 
     img_sec_mean = np.mean(img_secs)
     img_sec_conf = 1.96 * np.std(img_secs)
