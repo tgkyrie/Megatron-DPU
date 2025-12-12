@@ -51,6 +51,9 @@ def parse_args():
                         help='enable autograd profiler on rank 0，并导出 trace')
     parser.add_argument('--trace-dir', type=str, default='./traces_ddp',
                         help='profile 导出的目录（仅 rank0 会写入）')
+                        help='enable autograd profiler on rank 0，并导出 trace')
+    parser.add_argument('--trace-dir', type=str, default='./traces_ddp',
+                        help='profile 导出的目录（仅 rank0 会写入）')
 
     return parser.parse_args()
 
@@ -90,6 +93,7 @@ def main():
     # ---- Fake data：结构仿照 BytePS synthetic benchmark ----
     datasets = []
     targets = []
+    targets = []
     for _ in range(100):
         data = torch.rand(args.batch_size, 3, 224, 224)
         # BytePS 脚本里写死 1000，这里保持一致
@@ -98,11 +102,14 @@ def main():
             data, target = data.cuda(), target.cuda()
         datasets.append(data)
         targets.append(target)
+        targets.append(target)
     data_index = 0
 
     def benchmark_step():
         nonlocal data_index
+        nonlocal data_index
         data = datasets[data_index % len(datasets)]
+        target = targets[data_index % len(targets)]
         target = targets[data_index % len(targets)]
         data_index += 1
         optimizer.zero_grad()
@@ -132,6 +139,7 @@ def main():
     # 注意：沿用 BytePS 中的按位与写法（功能等价于 and）
     enable_profiling = args.profiler & (rank == 0)
 
+    prof = None
     if enable_profiling:
         from torch.profiler import profile, ProfilerActivity
         activities = [ProfilerActivity.CPU]
@@ -148,7 +156,6 @@ def main():
             if rank == 0:
                 trace_path = os.path.join(args.trace_dir, "ddp_rank0_trace.json")
                 prof.export_chrome_trace(trace_path)
-                # 打印与通信相关的热点（过滤 nccl / all_reduce）
                 nccl_rows = [e for e in prof.key_averages() if 'nccl' in e.key.lower() or 'all_reduce' in e.key.lower()]
                 log("---- Profiler (nccl/all_reduce related) ----")
                 for e in nccl_rows[:10]:
