@@ -24,8 +24,8 @@ WORKDIR ${BYTEPS_BASE_PATH}
 # 将本地仓库中的 byteps 目录（Megatron-DPU/byteps）作为构建源
 COPY ./byteps/ ${BYTEPS_BASE_PATH}/byteps/
 # 便捷脚本放入 /usr/local
-COPY ./byteps/sh/server.sh ./byteps/sh/scheduler.sh ./byteps/sh/worker.sh ./byteps/sh/worker_ddp.sh ./byteps/sh/worker_single.sh ./byteps/sh/allreduce.sh /usr/local/
-RUN chmod +x /usr/local/server.sh /usr/local/scheduler.sh /usr/local/worker.sh /usr/local/worker_ddp.sh /usr/local/worker_single.sh /usr/local/allreduce.sh
+COPY ./byteps/sh/server.sh ./byteps/sh/scheduler.sh ./byteps/sh/worker.sh ./byteps/sh/worker_ddp.sh ./byteps/sh/worker_single.sh /usr/local/
+RUN chmod +x /usr/local/server.sh /usr/local/scheduler.sh /usr/local/worker.sh /usr/local/worker_ddp.sh /usr/local/worker_single.sh
 
 RUN cd $BYTEPS_PATH && python3 setup.py install
 
