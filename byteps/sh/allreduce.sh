@@ -52,4 +52,4 @@ fi
 
 #################### 启动 DDP benchmark ####################
 python3 /usr/local/byteps/example/pytorch/allreduce_bench.py \
-  --size-mb 520 --num-iters 5 ${BUCKET_ARG} "$@"
+  --size-mb 520 --iters 50 ${BUCKET_ARG} "$@"
