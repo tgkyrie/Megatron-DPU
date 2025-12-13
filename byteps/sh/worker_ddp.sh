@@ -43,6 +43,13 @@ echo "[DDP] CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES LOCAL_RANK=$LOCAL_RANK"
 echo "[DDP] NCCL_IB_DISABLE=$NCCL_IB_DISABLE NCCL_SOCKET_IFNAME=$NCCL_SOCKET_IFNAME NCCL_IB_HCA=$NCCL_IB_HCA NCCL_IB_GID_INDEX=$NCCL_IB_GID_INDEX"
 echo "[DDP] NCCL_DEBUG=$NCCL_DEBUG NCCL_DEBUG_SUBSYS=$NCCL_DEBUG_SUBSYS"
 
+# DDP bucket 大小（MB），可通过 BUCKET_CAP_MB 覆盖；不设则用框架默认
+BUCKET_ARG=
+if [ -n "${BUCKET_CAP_MB:-}" ]; then
+  BUCKET_ARG="--bucket-cap-mb ${BUCKET_CAP_MB}"
+  echo "[DDP] bucket_cap_mb=${BUCKET_CAP_MB}"
+fi
+
 #################### 启动 DDP benchmark ####################
 python3 /usr/local/byteps/example/pytorch/torch_ddp_benchmark.py \
-  --model vgg16 --num-iters 10 "$@"
+  --model vgg16 --num-iters 5 ${BUCKET_ARG} "$@"
