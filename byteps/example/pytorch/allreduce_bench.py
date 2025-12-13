@@ -20,8 +20,8 @@ import torch.distributed as dist
 def parse_args():
     p = argparse.ArgumentParser(description="AllReduce-only benchmark")
     p.add_argument("--size-mb", type=float, default=520.0, help="单次 allreduce 张量大小 (MB)")
-    p.add_argument("--iters", type=int, default=10, help="正式迭代次数")
-    p.add_argument("--warmup", type=int, default=5, help="热身次数")
+    p.add_argument("--iters", type=int, default=50, help="正式迭代次数")
+    p.add_argument("--warmup", type=int, default=10, help="热身次数")
     p.add_argument("--dtype", type=str, default="float32", help="数据类型 (float32/float16)")
     return p.parse_args()
 
@@ -60,8 +60,18 @@ def main():
         dur_ms = (time.time() - t0) * 1000.0
         if rank == 0:
             bytes_len = args.size_mb * 1024 * 1024
-            bw = bytes_len * world_size / dur_ms / 1e6  # MB/s 聚合带宽
-            print(f"[allreduce] iter={i} time_ms={dur_ms:.3f} agg_bw_MBps={bw:.1f}")
+            sec = dur_ms / 1000.0
+            per_rank_GBps = bytes_len / sec / 1e9
+            agg_GB = (bytes_len * world_size) / sec / 1e9
+            bus_GB = (bytes_len * (2 * (world_size - 1) / world_size)) / sec / 1e9
+            print(
+                f"[allreduce] iter={i} time_ms={dur_ms:.3f} "
+                f"per_rank_GBps={per_rank_GBps:.2f} "
+                f"agg_GB/s={agg_GB:.2f} "
+                f"bus_GB/s={bus_GB:.2f}"
+            )
+            # bw = bytes_len * world_size / dur_ms / 1e6  # GB/s 聚合带宽
+            # print(f"[allreduce] iter={i} time_ms={dur_ms:.3f} agg_bw_GB/s={bw:.1f}")
 
     dist.barrier()
 
