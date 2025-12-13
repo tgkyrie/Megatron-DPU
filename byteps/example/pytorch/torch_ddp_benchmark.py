@@ -59,6 +59,12 @@ def parse_args():
         default=False,
         help="通信改为同步等待，测纯通信时用；默认异步允许与计算重叠",
     )
+    parser.add_argument(
+        "--bucket-cap-mb",
+        type=float,
+        default=None,
+        help="DDP bucket_cap_mb（不设则用 PyTorch 默认）；调大可减少 bucket 数、趋向单大包",
+    )
     parser.set_defaults(comm_log=True)
     return parser.parse_args()
 
@@ -87,8 +93,12 @@ def main():
         model.cuda()
     optimizer = optim.SGD(model.parameters(), lr=0.01)
 
+    ddp_kwargs = {}
+    if args.bucket_cap_mb is not None:
+        ddp_kwargs["bucket_cap_mb"] = args.bucket_cap_mb
+
     ddp_model = torch.nn.parallel.DistributedDataParallel(
-        model, device_ids=[local_rank] if args.cuda else None
+        model, device_ids=[local_rank] if args.cuda else None, **ddp_kwargs
     )
 
     # 记录每个 allreduce bucket 的通信字节数和耗时（日志仅 rank0 输出，默认开启，可通过 --no-comm-log 关闭）

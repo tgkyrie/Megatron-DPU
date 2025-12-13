@@ -7,7 +7,7 @@ set -e
 #################### 基本配置（可按需覆盖） ####################
 # 类似 BytePS 的 scheduler：选一台机器作为 master
 MASTER_ADDR=${MASTER_ADDR:-192.168.1.10}
-MASTER_PORT=${MASTER_PORT:-29500}
+MASTER_PORT=${MASTER_PORT:-29501}
 
 # 总机器数（每机一个进程，一个 GPU）
 WORLD_SIZE=${WORLD_SIZE:-2}
@@ -51,5 +51,5 @@ if [ -n "${BUCKET_CAP_MB:-}" ]; then
 fi
 
 #################### 启动 DDP benchmark ####################
-python3 /usr/local/byteps/example/pytorch/torch_ddp_benchmark.py \
-  --model vgg16 --num-iters 5 ${BUCKET_ARG} "$@"
+python3 /usr/local/byteps/example/pytorch/allreduce_bench.py \
+  --size-mb 520 --num-iters 5 ${BUCKET_ARG} "$@"
