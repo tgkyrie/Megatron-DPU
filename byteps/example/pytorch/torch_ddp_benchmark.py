@@ -103,7 +103,6 @@ def main():
     if args.comm_log:
         import time
         import threading
-        import torch.futures
 
         _comm_lock = threading.Lock()
 
