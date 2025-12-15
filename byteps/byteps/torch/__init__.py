@@ -57,7 +57,8 @@ class _DistributedOptimizer(torch.optim.Optimizer):
                              'tuples (name, parameter), usually produced by '
                              'model.named_parameters().')
 
-        dups = _DistributedOptimizer.find_duplicates([k for k, _ in named_parameters])
+        dups = _DistributedOptimizer.find_duplicates(
+            [k for k, _ in named_parameters])
         if len(dups) > 0:
             raise ValueError('Parameter names in named_parameters must be unique. '
                              'Found duplicates: %s' % ', '.join(dups))
@@ -72,7 +73,8 @@ class _DistributedOptimizer(torch.optim.Optimizer):
                 # https://github.com/pytorch/pytorch/issues/7733
                 self._parameter_names = {v.__hash__(): k for k, v
                                          in sorted(named_parameters)}
-                self._tensor_list = [tensor for name, tensor in named_parameters]
+                self._tensor_list = [tensor for name, tensor
+                                     in named_parameters]
             else:
                 self._is_tensor_instance = False
                 self._parameter_names = {v: k for k, v
@@ -185,7 +187,8 @@ class _DistributedOptimizer(torch.optim.Optimizer):
     @contextmanager
     def skip_synchronize(self):
         if self._enable_async:
-            raise AssertionError("skip_synchronize cannot be used in async training")
+            raise AssertionError(
+                "skip_synchronize cannot be used in async training")
         self._should_sync = False
         try:
             yield
@@ -210,7 +213,8 @@ class _DistributedOptimizer(torch.optim.Optimizer):
                         name = self._parameter_names.get(p.__hash__())
                     else:
                         name = self._parameter_names.get(p)
-                    handle = byteps_push_pull(p, average=False, name="AsyncParam."+name)
+                    handle = byteps_push_pull(
+                        p, average=False, name="Parameter."+name)
                     _, ctx = self._compression.compress(p)
                     self._handles[p] = (handle, ctx)
 
