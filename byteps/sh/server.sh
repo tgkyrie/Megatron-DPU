@@ -10,6 +10,10 @@ export DMLC_NUM_WORKER=${DMLC_NUM_WORKER:-2}
 export DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-2}
 export DMLC_ROLE=server
 
+# 启用 IPC 和异步通信以提升性能
+export BYTEPS_ENABLE_IPC=1
+export BYTEPS_ENABLE_ASYNC=1
+
 export DMLC_INTERFACE=${DMLC_INTERFACE:-ens39f1np1}
 
 detect_ip() {
