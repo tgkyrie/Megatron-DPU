@@ -125,7 +125,7 @@ with torch.autograd.profiler.profile(enabled=enable_profiling, use_cuda=True) as
         if args.cuda:
             torch.cuda.synchronize()
         t = time.perf_counter() - start
-        img_sec = args.batch_size * args.num_batches_per_iter / time
+        img_sec = args.batch_size * args.num_batches_per_iter / t
         log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
         img_secs.append(img_sec)
 
