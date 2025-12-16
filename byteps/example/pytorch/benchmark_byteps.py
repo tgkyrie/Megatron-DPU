@@ -10,6 +10,7 @@ import byteps.torch as bps
 import timeit
 import numpy as np
 import os, sys
+import time
 
 # Benchmark settings
 parser = argparse.ArgumentParser(description='PyTorch Synthetic Benchmark',
@@ -116,7 +117,14 @@ enable_profiling = args.profiler & (bps.rank() == 0)
 
 with torch.autograd.profiler.profile(enabled=enable_profiling, use_cuda=True) as prof:
     for x in range(args.num_iters):
-        time = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
+        if args.cuda:
+            torch.cuda.synchronize()
+        start = time.perf_counter()
+        for _ in range(args.num_batches_per_iter):
+            benchmark_step()
+        if args.cuda:
+            torch.cuda.synchronize()
+        t = time.perf_counter() - start
         img_sec = args.batch_size * args.num_batches_per_iter / time
         log('Iter #%d: %.1f img/sec per %s' % (x, img_sec, device))
         img_secs.append(img_sec)
@@ -128,4 +136,3 @@ img_sec_conf = 1.96 * np.std(img_secs)
 log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
 log('Total img/sec on %d %s(s): %.1f +-%.1f' %
     (bps.size(), device, bps.size() * img_sec_mean, bps.size() * img_sec_conf))
-

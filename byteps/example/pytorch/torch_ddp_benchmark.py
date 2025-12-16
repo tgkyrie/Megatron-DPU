@@ -228,9 +228,14 @@ def main():
                 comm_state["bytes_sum"] = 0
                 comm_state["time_sum"] = 0.0
                 comm_state["bucket_count"] = 0
-                t = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
                 if args.cuda:
                     torch.cuda.synchronize()
+                start = time.perf_counter()
+                for _ in range(args.num_batches_per_iter):
+                    benchmark_step()
+                if args.cuda:
+                    torch.cuda.synchronize()
+                t = time.perf_counter() - start
                 img_sec = args.batch_size * args.num_batches_per_iter / t
                 log(f"Iter #{x}: {img_sec:.1f} img/sec per {device}")
                 img_secs.append(img_sec)
@@ -263,9 +268,14 @@ def main():
             comm_state["bytes_sum"] = 0
             comm_state["time_sum"] = 0.0
             comm_state["bucket_count"] = 0
-            t = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
             if args.cuda:
                 torch.cuda.synchronize()
+            start = time.perf_counter()
+            for _ in range(args.num_batches_per_iter):
+                benchmark_step()
+            if args.cuda:
+                torch.cuda.synchronize()
+            t = time.perf_counter() - start
             img_sec = args.batch_size * args.num_batches_per_iter / t
             log(f"Iter #{x}: {img_sec:.1f} img/sec per {device}")
             img_secs.append(img_sec)
