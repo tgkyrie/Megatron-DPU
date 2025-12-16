@@ -5,6 +5,7 @@ import torch.backends.cudnn as cudnn
 import torch.nn.functional as F
 import torch.optim as optim
 import torch.utils.data.distributed
+import torch.distributed as dist
 from torchvision import models
 import byteps.torch as bps
 import timeit
@@ -38,12 +39,20 @@ parser.add_argument('--profiler', action='store_true', default=False,
                     help='disables profiler')
 parser.add_argument('--partition', type=int, default=None,
                     help='partition size')
+parser.add_argument('--print-backend', action='store_true', default=False,
+                    help='打印 torch.distributed backend（可确认是否是 nccl）')
 
 
 args = parser.parse_args()
 args.cuda = not args.no_cuda and torch.cuda.is_available()
 
 bps.init()
+
+if args.print_backend:
+    # 仅用于确认 backend；BytePS 包装的 DDP 不一定显式初始化 torch.distributed
+    print(f"[rank {bps.rank()}] dist.is_available={dist.is_available()} "
+          f"is_initialized={dist.is_initialized()} "
+          f"backend={dist.get_backend() if dist.is_initialized() else 'N/A'}")
 
 if args.cuda:
     # BytePS: pin GPU to local rank.
@@ -116,7 +125,7 @@ log('Running benchmark...')
 img_secs = []
 enable_profiling = args.profiler & (bps.rank() == 0)
 
-with torch.autograd.profiler.profile(enable_profiling, True) as prof:
+with torch.autograd.profiler.profile(enabled=enable_profiling, use_cuda=True) as prof:
     for x in range(args.num_iters):
         time = timeit.timeit(benchmark_step, number=args.num_batches_per_iter)
         img_sec = args.batch_size * args.num_batches_per_iter / time
@@ -130,4 +139,3 @@ img_sec_conf = 1.96 * np.std(img_secs)
 log('Img/sec per %s: %.1f +-%.1f' % (device, img_sec_mean, img_sec_conf))
 log('Total img/sec on %d %s(s): %.1f +-%.1f' %
     (bps.size(), device, bps.size() * img_sec_mean, bps.size() * img_sec_conf))
-
