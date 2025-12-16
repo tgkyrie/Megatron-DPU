@@ -166,12 +166,21 @@ class ReadyEvent {
 };
 
 // add for profiling
+// Direction of network communication (TX = send, RX = receive)
+enum TraceDir { DIR_NONE = 0, DIR_TX = 1, DIR_RX = 2 };
+// Phase of trace event (QUEUE = queue-level, NET = network sub-phase)
+enum TracePhase { PHASE_QUEUE = 0, PHASE_NET = 1 };
+
 typedef struct CommTime {
   long long start_t;
   long long dur = 0;
   bool end = false;
-  int key = -1;
+  int64_t key = -1;  // Changed from int to int64_t to avoid truncation of ps::Key (uint64_t)
   int type = -1;
+  // New fields for enhanced profiling
+  uint64_t size_bytes = 0;  // data size in bytes (for PUSH/PULL NET events)
+  uint8_t dir = DIR_NONE;   // TraceDir: TX or RX
+  uint8_t phase = PHASE_QUEUE;  // TracePhase: QUEUE or NET
 } BPSCommTime;
 
 typedef struct BytePSContext {
@@ -198,6 +207,11 @@ typedef struct BytePSContext {
   std::unordered_map<uint64_t,
                      std::unordered_map<int, std::queue<BPSCommTime*>>>
       part_comm_time;
+  // Separate container for NET phase events (PUSH/PULL network timing)
+  // This avoids conflicting with part_comm_time which is used by FinishOrProceed
+  std::unordered_map<uint64_t,
+                     std::unordered_map<int, std::queue<BPSCommTime*>>>
+      net_comm_time;
   // Compressor list
   std::vector<std::shared_ptr<compressor::Compressor>> compressor_list;
   // kwargs

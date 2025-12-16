@@ -568,8 +568,37 @@ bool RunPushLoopOnce() {
 
       int cmd = GetCommandType(RequestType::kDefaultPushPull, dtype);
       auto &pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
+
+      // --- NET event profiling for PUSH (TX) ---
+      // Use separate net_comm_time container to avoid conflict with FinishOrProceed's back() assumption
+      BPSCommTime* ret_net = nullptr;
+      if (task->context->profile_flag) {
+        auto now = std::chrono::system_clock::now();
+        auto duration = now.time_since_epoch();
+        auto us = std::chrono::duration_cast<std::chrono::microseconds>(duration);
+
+        ret_net = new BPSCommTime;
+        ret_net->start_t = (long long)(us.count());
+        ret_net->key = task->key;
+        ret_net->type = PUSH;
+        ret_net->phase = PHASE_NET;
+        ret_net->dir = DIR_TX;
+        ret_net->size_bytes = len;  // len already reflects compressed size if applicable
+        // Push to net_comm_time instead of part_comm_time
+        task->context->net_comm_time[task->key][PUSH].push(ret_net);
+      }
+
       BytePSGlobal::GetPS()->ZPush(pskv.keys, vals, pskv.lens, cmd,
-                                   [task, q]() { FinishOrProceed(task); });
+                                   [task, q, ret_net]() {
+                                     // Complete NET event timing
+                                     if (ret_net != nullptr) {
+                                       auto now = std::chrono::system_clock::now();
+                                       auto duration = now.time_since_epoch();
+                                       auto us = std::chrono::duration_cast<std::chrono::microseconds>(duration);
+                                       ret_net->dur = (long long)(us.count()) - ret_net->start_t;
+                                     }
+                                     FinishOrProceed(task);
+                                   });
     } else {
       // This is a dummy barrier for IsCrossPcieSwitch()
       BPS_CHECK(BytePSGlobal::IsCrossPcieSwitch());
@@ -605,9 +634,36 @@ bool RunPullLoopOnce() {
 
     int cmd = GetCommandType(RequestType::kDefaultPushPull, dtype);
     auto &pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
+
+    // --- NET event profiling for PULL (RX) ---
+    // Use separate net_comm_time container to avoid conflict with FinishOrProceed's back() assumption
+    BPSCommTime* ret_net = nullptr;
+    if (task->context->profile_flag) {
+      auto now = std::chrono::system_clock::now();
+      auto duration = now.time_since_epoch();
+      auto us = std::chrono::duration_cast<std::chrono::microseconds>(duration);
+
+      ret_net = new BPSCommTime;
+      ret_net->start_t = (long long)(us.count());
+      ret_net->key = task->key;
+      ret_net->type = PULL;
+      ret_net->phase = PHASE_NET;
+      ret_net->dir = DIR_RX;
+      ret_net->size_bytes = pskv.lens[0];  // bytes to be received
+      // Push to net_comm_time instead of part_comm_time
+      task->context->net_comm_time[task->key][PULL].push(ret_net);
+    }
+
     // issue pull
     BytePSGlobal::GetPS()->ZPull(pskv.keys, vals, &pskv.lens, cmd,
-                                 [vals, task, q]() {
+                                 [vals, task, q, ret_net]() {
+                                   // Complete NET event timing
+                                   if (ret_net != nullptr) {
+                                     auto now = std::chrono::system_clock::now();
+                                     auto duration = now.time_since_epoch();
+                                     auto us = std::chrono::duration_cast<std::chrono::microseconds>(duration);
+                                     ret_net->dur = (long long)(us.count()) - ret_net->start_t;
+                                   }
                                    delete vals;
                                    FinishOrProceed(task);
                                  });
