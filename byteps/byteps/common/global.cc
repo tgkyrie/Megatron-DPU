@@ -472,11 +472,34 @@ void BytePSGlobal::EmitTrace(std::ostream* os, const BPSCommTime* ret,
   std::string para_name = "Comm." + ctxt->tensor_name;
   std::string para_name_type =
       (ret->key == -1) ? para_name : para_name + "." + LogStrings[ret->type];
+
+  // For NET phase events, append ".NET" suffix to distinguish from queue events
+  if (ret->phase == PHASE_NET) {
+    para_name_type += ".NET";
+  }
+
+  // Determine direction string for NET events
+  std::string dir_str;
+  if (ret->dir == DIR_TX) {
+    dir_str = "TX";
+  } else if (ret->dir == DIR_RX) {
+    dir_str = "RX";
+  }
+
   (*os) << "        {\n"
         << "            \"ph\": \"X\",\n"
         << "            \"args\": {\n"
-        << "                \"name\": \"" << para_name << "\"\n"
-        << "            },\n"
+        << "                \"name\": \"" << para_name << "\"";
+
+  // Add bytes and dir fields for NET phase events
+  if (ret->phase == PHASE_NET) {
+    (*os) << ",\n                \"bytes\": " << ret->size_bytes;
+    if (!dir_str.empty()) {
+      (*os) << ",\n                \"dir\": \"" << dir_str << "\"";
+    }
+  }
+
+  (*os) << "\n            },\n"
         << "            \"pid\": \"" << para_name << "\",\n"
         << "            \"name\": \"" << para_name_type << "\",\n"
         << "            \"ts\": " << ret->start_t << ",\n"
@@ -552,6 +575,26 @@ void BytePSGlobal::OutputTraces() {
       // if the unordered_map becomes empty, all the traces of this part_id has
       // been read, delete this part_id
       ctxt->part_comm_time.erase(part_id);
+    }
+    // Output NET phase events from net_comm_time (separate container for PUSH/PULL network timing)
+    while (!ctxt->net_comm_time.empty()) {
+      auto part_id = ctxt->net_comm_time.begin()->first;
+      auto& type2net_comm_time = ctxt->net_comm_time.begin()->second;
+      while (!type2net_comm_time.empty()) {
+        auto type = type2net_comm_time.begin()->first;
+        auto& _net_comm_time_queue = type2net_comm_time.begin()->second;
+        while (_net_comm_time_queue.size() > 0) {
+          BPSCommTime* ret = _net_comm_time_queue.front();
+          if (!first)
+            file << ",\n";
+          else
+            first = false;
+          BytePSGlobal::EmitTrace(&file, ret, ctxt);
+          _net_comm_time_queue.pop();
+        }
+        type2net_comm_time.erase(type);
+      }
+      ctxt->net_comm_time.erase(part_id);
     }
   }
   file << "\n" << std::endl;
