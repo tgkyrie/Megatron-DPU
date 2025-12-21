@@ -12,7 +12,7 @@ export DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-2}
 export DMLC_ROLE=scheduler
 
 # 启用 IPC 和异步通信以提升性能
-export BYTEPS_ENABLE_IPC=${BYTEPS_ENABLE_IPC:-1}
+export BYTEPS_ENABLE_IPC=${BYTEPS_ENABLE_IPC:-0}
 # export BYTEPS_ENABLE_ASYNC=${BYTEPS_ENABLE_ASYNC:-1}
 
 # 分片大小：默认 4MB，可以外面 export BYTEPS_PARTITION_BYTES 覆盖
@@ -36,12 +36,15 @@ export DMLC_PS_ROOT_PORT=${DMLC_PS_ROOT_PORT:-9010}
 # 本机 IP：默认按网卡自动检测
 export DMLC_NODE_HOST=${DMLC_NODE_HOST:-$(detect_ip)}
 
-echo "[scheduler] ROOT=${DMLC_PS_ROOT_URI}:${DMLC_PS_ROOT_PORT} "\
+# ===== NUMA 固定绑定到 node1 =====
+NUMACTL_PREFIX="numactl --cpunodebind=1 --membind=1"
+
+echo "[scheduler] NUMA=node1 ROOT=${DMLC_PS_ROOT_URI}:${DMLC_PS_ROOT_PORT} "\
      "NUM_WORKER=${DMLC_NUM_WORKER} NUM_SERVER=${DMLC_NUM_SERVER} "\
      "IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST}"
 
-# 捕捉 Ctrl+C/TERM，确保子进程被杀掉，端口释放
-python3 - <<'PY' &
+# 启动 scheduler（后台），并确保退出时释放端口/进程
+${NUMACTL_PREFIX} python3 - <<'PY' &
 import byteps.server  # import 即启动
 PY
 PID=$!

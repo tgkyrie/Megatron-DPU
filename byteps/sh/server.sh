@@ -11,8 +11,9 @@ export DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-2}
 export DMLC_ROLE=server
 
 # 启用 IPC 和异步通信以提升性能
-export BYTEPS_ENABLE_IPC=${BYTEPS_ENABLE_IPC:-1}
+export BYTEPS_ENABLE_IPC=${BYTEPS_ENABLE_IPC:-0}
 # export BYTEPS_ENABLE_ASYNC=${BYTEPS_ENABLE_ASYNC:-1}
+
 # 开启为 1 后 server 端也按优先级调度分片，可能在高并发场景更均衡，但会增加一些调度开销。
 export BYTEPS_SERVER_ENABLE_SCHEDULE=${BYTEPS_SERVER_ENABLE_SCHEDULE:-1}
 
@@ -37,13 +38,15 @@ export DMLC_NODE_HOST=${DMLC_NODE_HOST:-$(detect_ip)}
 # server engine 线程
 export BYTEPS_SERVER_ENGINE_THREAD=${BYTEPS_SERVER_ENGINE_THREAD:-64}
 
-echo "[server] ROOT=${DMLC_PS_ROOT_URI}:${DMLC_PS_ROOT_PORT} "\
-     "NUM_WORKER=${DMLC_NUM_WORKER} NUM_SERVER=${DMLC_NUM_SERVER} "\
-     "IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST} "\
-     "ENGINE_THREAD=${BYTEPS_SERVER_ENGINE_THREAD}"
+# ===== NUMA 固定绑定到 node1 =====
+NUMACTL_PREFIX="numactl --cpunodebind=1 --membind=1"
 
-# 捕捉 Ctrl+C/TERM，确保子进程被杀掉，端口释放
-python3 - <<'PY' &
+echo "[server] NUMA=node1 ROOT=${DMLC_PS_ROOT_URI}:${DMLC_PS_ROOT_PORT} "\
+     "NUM_WORKER=${DMLC_NUM_WORKER} NUM_SERVER=${DMLC_NUM_SERVER} "\
+     "IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST} ENGINE_THREAD=${BYTEPS_SERVER_ENGINE_THREAD}"
+
+# 启动 server（后台），并确保退出时释放端口/进程
+${NUMACTL_PREFIX} python3 - <<'PY' &
 import byteps.server  # import 即启动
 PY
 PID=$!
