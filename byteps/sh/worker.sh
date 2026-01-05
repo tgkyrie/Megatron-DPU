@@ -12,7 +12,7 @@ export DMLC_ROLE=worker
 export DMLC_WORKER_ID=${WORKER_ID}
 
 # 启用 IPC 和异步通信以提升性能
-export BYTEPS_ENABLE_IPC=${BYTEPS_ENABLE_IPC:-1}
+export BYTEPS_ENABLE_IPC=${BYTEPS_ENABLE_IPC:-0}
 # export BYTEPS_ENABLE_ASYNC=${BYTEPS_ENABLE_ASYNC:-0}
 
 # 分片大小：默认 4MB，可以外面 export BYTEPS_PARTITION_BYTES 覆盖
@@ -36,6 +36,7 @@ export DMLC_PS_ROOT_PORT=${DMLC_PS_ROOT_PORT:-9010}
 export DMLC_NODE_HOST=${DMLC_NODE_HOST:-$(detect_ip)}
 
 # 本机 GPU 拓扑：单机多卡需显式告诉 BytePS
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1}
 export BYTEPS_LOCAL_SIZE=${BYTEPS_LOCAL_SIZE:-1}   # 本机 GPU 数
 export BYTEPS_LOCAL_RANK=${BYTEPS_LOCAL_RANK:-0}   # 本进程使用的本地 GPU 编号
 

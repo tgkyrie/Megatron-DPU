@@ -52,4 +52,4 @@ fi
 
 #################### 启动 DDP benchmark ####################
 python3 /usr/local/byteps/example/pytorch/torch_ddp_benchmark.py \
-  --model vgg16 --num-iters 5 ${BUCKET_ARG} "$@"
+  --model vgg16 --num-iters 10 ${BUCKET_ARG} "$@"
