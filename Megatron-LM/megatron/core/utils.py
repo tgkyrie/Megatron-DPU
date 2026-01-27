@@ -333,6 +333,8 @@ def is_te_min_version(version, check_equality=True):
             "packaging is not installed. Please install it with `pip install packaging`."
         )
 
+    if get_te_version() is None:
+        return False
     if check_equality:
         return get_te_version() >= PkgVersion(version)
     return get_te_version() > PkgVersion(version)

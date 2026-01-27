@@ -1,47 +1,59 @@
-# syntax=docker/dockerfile:1.6
+########################
+# Dockerfile.arm64serverslim
+# - build BytePS server for arm64
+# - runtime slim (no CUDA/NCCL)
+# - keep /usr/local as working dir
+########################
 
 ########################
 # 1) Builder: 负责编译
 ########################
-FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS builder
+FROM ubuntu:22.04 AS builder
 
 ENV DEBIAN_FRONTEND=noninteractive
 ARG BYTEPS_PATH=/usr/local/byteps
 ENV BYTEPS_PATH=${BYTEPS_PATH}
 
-# 只构建 server，避免最终因为 TF/Torch/MXNet 都没装而失败
+# 只构建 server（不装 TF/Torch/MXNet）
 ENV BYTEPS_SERVER_ONLY=1
 
+# 提升编译速度（并行）
+ENV MAKEFLAGS="-j$(nproc)"
+
+# 1) 构建依赖（尽量稳定的层放前面，利于缓存）
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      tzdata ca-certificates \
+      ca-certificates tzdata \
       git curl wget \
       build-essential cmake autoconf automake libtool pkg-config binutils \
       numactl libnuma-dev \
       ibverbs-providers libibverbs-dev ibverbs-utils \
       librdmacm-dev rdmacm-utils \
-      python3 python3-dev python3-pip python3-setuptools python3-wheel python-is-python3 \
       libssl-dev libffi-dev \
+      python3 python3-dev python3-pip python3-setuptools python3-wheel python-is-python3 \
     ; \
     rm -rf /var/lib/apt/lists/*; \
     python3 -m pip install --no-cache-dir -U pip setuptools wheel; \
     python3 -m pip install --no-cache-dir -U numpy cloudpickle==3.1.1
 
 WORKDIR /usr/local
-COPY ./byteps/ ${BYTEPS_PATH}/
 
+# 2) 先拷贝脚本（脚本变更不应该触发重编译时，可把这段放到更后面；这里保留也可以）
+#    如果你经常改 server.sh，建议把这段挪到“编译完成之后”再 COPY。
 COPY ./byteps/sh/server.sh \
      ./byteps/sh/scheduler.sh \
      ./byteps/sh/worker.sh \
      ./byteps/sh/worker_ddp.sh \
      ./byteps/sh/worker_single.sh \
      /usr/local/
-
 RUN set -eux; \
     chmod +x /usr/local/server.sh /usr/local/scheduler.sh /usr/local/worker.sh /usr/local/worker_ddp.sh /usr/local/worker_single.sh
 
-# 1) arm64：删 setup.py 里的 x86/clang flags；ps-lite 里删 -msse2/-mno-avx512f
+# 3) 再拷贝源码（放后面：你改源码才会触发后续编译层重跑）
+COPY ./byteps/ ${BYTEPS_PATH}/
+
+# 4) arm64：删 setup.py 里的 x86/clang flags；ps-lite 里删 -msse2/-mno-avx512f
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     if [ "$arch" = "arm64" ]; then \
@@ -58,7 +70,7 @@ RUN set -eux; \
       fi; \
     fi
 
-# 2) half_t 修复：arm64 server 编译时补 half_t=uint16_t
+# 5) half_t 修复：arm64 server 编译时补 half_t=uint16_t
 RUN set -eux; \
 python3 - <<'PY'
 import subprocess, re, sys
@@ -77,25 +89,23 @@ if marker in t:
     print("half_t fix already applied")
     sys.exit(0)
 
-# 若存在 mshadow half_t 定义，把它包进 !BYTEPS_BUILDING_SERVER
-t2 = re.sub(
+# 若存在 mshadow half_t 定义，把它包进 !BYTEPS_BUILDING_SERVER（避免 server 编译期依赖/冲突）
+t = re.sub(
     r"^(\s*)(using\s+half_t\s*=\s*mshadow::half::half_t\s*;\s*)$",
     r"\1#if !defined(BYTEPS_BUILDING_SERVER)\n\1\2\n\1#endif\n",
     t,
     count=1,
     flags=re.M,
 )
-t3 = re.sub(
+t = re.sub(
     r"^(\s*)(typedef\s+mshadow::half::half_t\s+half_t\s*;\s*)$",
     r"\1#if !defined(BYTEPS_BUILDING_SERVER)\n\1\2\n\1#endif\n",
-    t2,
+    t,
     count=1,
     flags=re.M,
 )
 
-t = t3
-
-# 在第一个 namespace 之前插入 server-only half_t
+# 在第一个 namespace 之前插入 server-only half_t（全局可见）
 block = (
     f"/* {marker} */\n"
     f"#if defined(BYTEPS_BUILDING_SERVER)\n"
@@ -105,16 +115,13 @@ block = (
 )
 
 ns = re.search(r"^\s*namespace\b", t, flags=re.M)
-if ns:
-    t = t[:ns.start()] + block + t[ns.start():]
-else:
-    t = block + t
+t = (t[:ns.start()] + block + t[ns.start():]) if ns else (block + t)
 
 p.write_text(t)
 print("patched:", p)
 PY
 
-# 3) server-only：build_server 后直接 return，跳过 TF/Torch/MXNet
+# 6) server-only：build_server 后直接 return，跳过 TF/Torch/MXNet
 RUN set -eux; \
 python3 - <<'PY'
 from pathlib import Path
@@ -147,16 +154,15 @@ p.write_text(t)
 print("patched:", p)
 PY
 
-# 4) 编译安装 BytePS
+# 7) 编译安装 BytePS（只编 server）
 RUN set -eux; \
     cd "${BYTEPS_PATH}"; \
     python3 setup.py install; \
     ldconfig; \
-    \
-    # 可选：strip 一下 .so，进一步减小体积（失败也不影响）
+    # strip 一下 so（减小体积；失败不影响）
     find /usr/local/lib/python3.10/dist-packages/byteps -name "*.so" -exec strip --strip-unneeded {} + || true
 
-# 5) 把 runtime 需要的文件打成一个 tar，方便在 runtime 阶段精确拷贝（避免 COPY 通配符坑）
+# 8) 打包 runtime 需要的文件
 RUN set -eux; \
 python3 - <<'PY'
 import site, tarfile
@@ -165,21 +171,20 @@ from pathlib import Path
 sp = Path(site.getsitepackages()[0])
 tar_path = Path("/tmp/byteps_runtime.tar")
 
-paths = []
-paths.append(sp / "byteps")
-paths.extend(sorted(sp.glob("byteps-*.dist-info")))
-paths.extend([Path("/usr/local/server.sh"),
-              Path("/usr/local/scheduler.sh"),
-              Path("/usr/local/worker.sh"),
-              Path("/usr/local/worker_ddp.sh"),
-              Path("/usr/local/worker_single.sh")])
+paths = [
+    sp / "byteps",
+    *sorted(sp.glob("byteps-*.dist-info")),
+    Path("/usr/local/server.sh"),
+    Path("/usr/local/scheduler.sh"),
+    Path("/usr/local/worker.sh"),
+    Path("/usr/local/worker_ddp.sh"),
+    Path("/usr/local/worker_single.sh"),
+]
 
 with tarfile.open(tar_path, "w") as tf:
     for p in paths:
-        if not p.exists():
-            continue
-        arc = p.as_posix().lstrip("/")
-        tf.add(p, arcname=arc)
+        if p.exists():
+            tf.add(p, arcname=p.as_posix().lstrip("/"))
 
 print("packed:", tar_path)
 PY
@@ -193,12 +198,15 @@ FROM ubuntu:22.04 AS runtime
 ENV DEBIAN_FRONTEND=noninteractive
 ARG ENABLE_RDMA=1
 
-# 运行时依赖：python + 常用运行库 +（默认）RDMA 运行库
+# 默认工作目录在 /usr/local
+WORKDIR /usr/local
+
+# 运行时依赖：python + 基础库 + NUMA +（默认）RDMA 运行库
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
       ca-certificates tzdata \
-      bash iproute2 \
+      bash iproute2 procps \
       python3 python3-pip python-is-python3 \
       libstdc++6 libgcc-s1 libgomp1 libffi8 \
       numactl libnuma1 \
@@ -206,7 +214,7 @@ RUN set -eux; \
     ; \
     if [ "$ENABLE_RDMA" = "1" ]; then \
       apt-get install -y --no-install-recommends \
-        ibverbs-providers libibverbs1 librdmacm1 \
+        rdma-core ibverbs-providers libibverbs1 librdmacm1 \
       ; \
     fi; \
     rm -rf /var/lib/apt/lists/*; \
@@ -223,3 +231,4 @@ RUN set -eux; \
     chmod +x /usr/local/server.sh /usr/local/scheduler.sh /usr/local/worker*.sh
 
 CMD ["bash"]
+

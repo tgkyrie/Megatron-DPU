@@ -3,3 +3,11 @@
 byteps/sh/**
 !byteps/sh/*.sh
 Megatron-LM/.git
+**/__pycache__/
+**/*.pyc
+**/*.o
+**/*.so
+**/build/
+**/dist/
+**/*.log
+.buildx-cache
