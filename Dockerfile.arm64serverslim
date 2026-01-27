@@ -1,0 +1,225 @@
+# syntax=docker/dockerfile:1.6
+
+########################
+# 1) Builder: 负责编译
+########################
+FROM nvidia/cuda:11.8.0-cudnn8-devel-ubuntu22.04 AS builder
+
+ENV DEBIAN_FRONTEND=noninteractive
+ARG BYTEPS_PATH=/usr/local/byteps
+ENV BYTEPS_PATH=${BYTEPS_PATH}
+
+# 只构建 server，避免最终因为 TF/Torch/MXNet 都没装而失败
+ENV BYTEPS_SERVER_ONLY=1
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      tzdata ca-certificates \
+      git curl wget \
+      build-essential cmake autoconf automake libtool pkg-config binutils \
+      numactl libnuma-dev \
+      ibverbs-providers libibverbs-dev ibverbs-utils \
+      librdmacm-dev rdmacm-utils \
+      python3 python3-dev python3-pip python3-setuptools python3-wheel python-is-python3 \
+      libssl-dev libffi-dev \
+    ; \
+    rm -rf /var/lib/apt/lists/*; \
+    python3 -m pip install --no-cache-dir -U pip setuptools wheel; \
+    python3 -m pip install --no-cache-dir -U numpy cloudpickle==3.1.1
+
+WORKDIR /usr/local
+COPY ./byteps/ ${BYTEPS_PATH}/
+
+COPY ./byteps/sh/server.sh \
+     ./byteps/sh/scheduler.sh \
+     ./byteps/sh/worker.sh \
+     ./byteps/sh/worker_ddp.sh \
+     ./byteps/sh/worker_single.sh \
+     /usr/local/
+
+RUN set -eux; \
+    chmod +x /usr/local/server.sh /usr/local/scheduler.sh /usr/local/worker.sh /usr/local/worker_ddp.sh /usr/local/worker_single.sh
+
+# 1) arm64：删 setup.py 里的 x86/clang flags；ps-lite 里删 -msse2/-mno-avx512f
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    if [ "$arch" = "arm64" ]; then \
+      echo "[arm64] patch setup.py flags + ps-lite flags"; \
+      sed -i -E \
+        -e "s/'-mno-avx512f',?[[:space:]]*//g" \
+        -e "s/'-msse2',?[[:space:]]*//g" \
+        -e "s/'-stdlib=libc\\+\\+',?[[:space:]]*//g" \
+        -e "s/'-march=native'/'-march=armv8-a'/g" \
+        "${BYTEPS_PATH}/setup.py"; \
+      if [ -d "${BYTEPS_PATH}/3rdparty/ps-lite" ]; then \
+        grep -RIl -- "-msse2" "${BYTEPS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-msse2([[:space:]]|$)/ /g'; \
+        grep -RIl -- "-mno-avx512f" "${BYTEPS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-mno-avx512f([[:space:]]|$)/ /g'; \
+      fi; \
+    fi
+
+# 2) half_t 修复：arm64 server 编译时补 half_t=uint16_t
+RUN set -eux; \
+python3 - <<'PY'
+import subprocess, re, sys
+from pathlib import Path
+
+arch = subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip()
+if arch != "arm64":
+    print("arch =", arch, "skip half_t patch")
+    sys.exit(0)
+
+p = Path("/usr/local/byteps/byteps/common/compressor/common.h")
+t = p.read_text()
+marker = "BYTEPS_ARM64_SERVER_HALF_T_FIX_V2"
+
+if marker in t:
+    print("half_t fix already applied")
+    sys.exit(0)
+
+# 若存在 mshadow half_t 定义，把它包进 !BYTEPS_BUILDING_SERVER
+t2 = re.sub(
+    r"^(\s*)(using\s+half_t\s*=\s*mshadow::half::half_t\s*;\s*)$",
+    r"\1#if !defined(BYTEPS_BUILDING_SERVER)\n\1\2\n\1#endif\n",
+    t,
+    count=1,
+    flags=re.M,
+)
+t3 = re.sub(
+    r"^(\s*)(typedef\s+mshadow::half::half_t\s+half_t\s*;\s*)$",
+    r"\1#if !defined(BYTEPS_BUILDING_SERVER)\n\1\2\n\1#endif\n",
+    t2,
+    count=1,
+    flags=re.M,
+)
+
+t = t3
+
+# 在第一个 namespace 之前插入 server-only half_t
+block = (
+    f"/* {marker} */\n"
+    f"#if defined(BYTEPS_BUILDING_SERVER)\n"
+    f"#include <stdint.h>\n"
+    f"typedef uint16_t half_t;\n"
+    f"#endif\n\n"
+)
+
+ns = re.search(r"^\s*namespace\b", t, flags=re.M)
+if ns:
+    t = t[:ns.start()] + block + t[ns.start():]
+else:
+    t = block + t
+
+p.write_text(t)
+print("patched:", p)
+PY
+
+# 3) server-only：build_server 后直接 return，跳过 TF/Torch/MXNet
+RUN set -eux; \
+python3 - <<'PY'
+from pathlib import Path
+import re, sys
+
+p = Path("/usr/local/byteps/setup.py")
+t = p.read_text()
+marker = "BYTEPS_SERVER_ONLY_PATCH"
+
+if marker in t:
+    print("server-only patch already applied")
+    sys.exit(0)
+
+pat = re.compile(r"^(\s*)build_server\(\s*self\s*,\s*options\s*\)\s*$", re.M)
+m = pat.search(t)
+if not m:
+    raise SystemExit("cannot find build_server(self, options) call to patch")
+
+indent = m.group(1)
+ins = (
+    f"{indent}# {marker}\n"
+    f"{indent}import os as _os\n"
+    f"{indent}if _os.environ.get('BYTEPS_SERVER_ONLY','0') == '1':\n"
+    f"{indent}    print('INFO: BYTEPS_SERVER_ONLY=1; server built; skip TF/Torch/MXNet plugins')\n"
+    f"{indent}    return\n"
+)
+
+t = t[:m.end()] + "\n" + ins + t[m.end():]
+p.write_text(t)
+print("patched:", p)
+PY
+
+# 4) 编译安装 BytePS
+RUN set -eux; \
+    cd "${BYTEPS_PATH}"; \
+    python3 setup.py install; \
+    ldconfig; \
+    \
+    # 可选：strip 一下 .so，进一步减小体积（失败也不影响）
+    find /usr/local/lib/python3.10/dist-packages/byteps -name "*.so" -exec strip --strip-unneeded {} + || true
+
+# 5) 把 runtime 需要的文件打成一个 tar，方便在 runtime 阶段精确拷贝（避免 COPY 通配符坑）
+RUN set -eux; \
+python3 - <<'PY'
+import site, tarfile
+from pathlib import Path
+
+sp = Path(site.getsitepackages()[0])
+tar_path = Path("/tmp/byteps_runtime.tar")
+
+paths = []
+paths.append(sp / "byteps")
+paths.extend(sorted(sp.glob("byteps-*.dist-info")))
+paths.extend([Path("/usr/local/server.sh"),
+              Path("/usr/local/scheduler.sh"),
+              Path("/usr/local/worker.sh"),
+              Path("/usr/local/worker_ddp.sh"),
+              Path("/usr/local/worker_single.sh")])
+
+with tarfile.open(tar_path, "w") as tf:
+    for p in paths:
+        if not p.exists():
+            continue
+        arc = p.as_posix().lstrip("/")
+        tf.add(p, arcname=arc)
+
+print("packed:", tar_path)
+PY
+
+
+########################
+# 2) Runtime: 真正运行镜像（无 CUDA/NCCL）
+########################
+FROM ubuntu:22.04 AS runtime
+
+ENV DEBIAN_FRONTEND=noninteractive
+ARG ENABLE_RDMA=1
+
+# 运行时依赖：python + 常用运行库 +（默认）RDMA 运行库
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      ca-certificates tzdata \
+      bash iproute2 \
+      python3 python3-pip python-is-python3 \
+      libstdc++6 libgcc-s1 libgomp1 libffi8 \
+      numactl libnuma1 \
+      libzmq5 \
+    ; \
+    if [ "$ENABLE_RDMA" = "1" ]; then \
+      apt-get install -y --no-install-recommends \
+        ibverbs-providers libibverbs1 librdmacm1 \
+      ; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*; \
+    python3 -m pip install --no-cache-dir -U pip setuptools wheel; \
+    python3 -m pip install --no-cache-dir -U numpy cloudpickle==3.1.1
+
+ENV BYTEPS_SERVER_ONLY=1
+
+# 解包安装好的 byteps + 脚本
+COPY --from=builder /tmp/byteps_runtime.tar /tmp/byteps_runtime.tar
+RUN set -eux; \
+    tar -xf /tmp/byteps_runtime.tar -C /; \
+    rm -f /tmp/byteps_runtime.tar; \
+    chmod +x /usr/local/server.sh /usr/local/scheduler.sh /usr/local/worker*.sh
+
+CMD ["bash"]

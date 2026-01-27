@@ -1,0 +1,24 @@
+# BytePS 基础镜像，单独构建
+FROM tgkyrie/byteps:latest
+
+ARG http_proxy
+ARG https_proxy
+
+ARG BYTEPS_BASE_PATH=/usr/local
+ARG BYTEPS_PATH=$BYTEPS_BASE_PATH/byteps
+
+
+WORKDIR ${BYTEPS_BASE_PATH}
+# 将本地仓库中的 byteps 目录（Megatron-DPU/byteps）作为构建源
+COPY ./byteps/ ${BYTEPS_BASE_PATH}/byteps/
+# 便捷脚本放入 /usr/local
+COPY ./byteps/sh/server.sh ./byteps/sh/scheduler.sh ./byteps/sh/worker.sh ./byteps/sh/worker_ddp.sh ./byteps/sh/worker_single.sh ./byteps/sh/allreduce.sh ./byteps/sh/pushpull.sh /usr/local/
+RUN chmod +x /usr/local/server.sh /usr/local/scheduler.sh /usr/local/worker.sh /usr/local/worker_ddp.sh /usr/local/worker_single.sh /usr/local/allreduce.sh /usr/local/pushpull.sh
+
+
+RUN cd $BYTEPS_PATH && rm -rf 3rdparty/ps-lite/build && rm -rf build && python3 setup.py clean && python3 setup.py install
+
+# 便捷：把 bpslaunch 加入 PATH（通常 setup.py 已安装）
+ENV PATH="/usr/local/bin:${PATH}"
+
+CMD ["bash"]
