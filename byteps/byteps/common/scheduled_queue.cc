@@ -98,6 +98,11 @@ void BytePSScheduledQueue::addTask(std::shared_ptr<TensorTableEntry> entry) {
   BPS_LOG(TRACE) << "Queue " << LogStrings[_qt]
                  << " addTask: " << entry->tensor_name << " key: " << entry->key
                  << " rank: " << BytePSGlobal::GetLocalRank();
+  if(getQueueType()==PUSH){
+    BPS_LOG(DEBUG) << "Queue " << LogStrings[_qt]
+                 << " addTask: " << entry->tensor_name << " key: " << entry->key
+                 << " rank: " << BytePSGlobal::GetLocalRank();
+  }
   return;
 }
 

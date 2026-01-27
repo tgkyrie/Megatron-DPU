@@ -17,14 +17,14 @@ export NCCL_SOCKET_IFNAME=ens39f1np1
 export NCCL_IB_HCA=mlx5_1       
 export GLOO_SOCKET_IFNAME=ens39f1np1
 
-CHECKPOINT_PATH=${1:-"checkpoints/llama3_8b_fp8"}
-TENSORBOARD_LOGS_PATH=${2:-"tensorboard_logs/llama3_8b_fp8"}
+#CHECKPOINT_PATH=${1:-"checkpoints/llama3_7b_fp8"}
+#TENSORBOARD_LOGS_PATH=${2:-"tensorboard_logs/llama3_7b_fp8"}
 TOKENIZER_ARG=${3:-"MOCK"} # Path to tokenizer model, or "MOCK"
 DATA_ARG=${4:-"MOCK"}     # Data prefix, or "MOCK"
 
 # Create directories if they don't exist
-mkdir -p "$(dirname "$CHECKPOINT_PATH")"
-mkdir -p "$(dirname "$TENSORBOARD_LOGS_PATH")"
+#mkdir -p "$(dirname "$CHECKPOINT_PATH")"
+#mkdir -p "$(dirname "$TENSORBOARD_LOGS_PATH")"
 
 # Distributed training setup
 GPUS_PER_NODE=2
@@ -49,7 +49,7 @@ SEQ_LENGTH=2048
 MAX_POSITION_EMBEDDINGS=8192
 
 # Data cache path (useful for both mock and real data)
-DATA_CACHE_PATH="${PWD}/benchmark_cache_llama3_8b_fp8"
+DATA_CACHE_PATH="${PWD}/benchmark_cache_llama3_7b_fp8"
 mkdir -p "$DATA_CACHE_PATH"
 
 DISTRIBUTED_ARGS=(
@@ -177,9 +177,9 @@ EVAL_AND_LOGGING_ARGS=(
     --profile-step-end 6
     --ckpt-format torch_dist 
     --distributed-timeout-minutes 60
-    --save "$CHECKPOINT_PATH"
-    --load "$CHECKPOINT_PATH" 
-    --tensorboard-dir "$TENSORBOARD_LOGS_PATH"
+    # --save "$CHECKPOINT_PATH"
+    # --load "$CHECKPOINT_PATH" 
+    # --tensorboard-dir "$TENSORBOARD_LOGS_PATH"
 )
 
 # Ensure pretrain_gpt.py is found

@@ -134,6 +134,7 @@ struct WRContext {
   WRContextType type;
   struct ibv_mr *buffer;
   void *private_data;
+  bool dataPlane;
 };
 
 struct RendezvousStart {
@@ -170,6 +171,7 @@ struct MessageBuffer {
 struct RequestContext {
   uint32_t node;
   uint16_t port;
+  uint8_t isDataPlane;
   char hostname[kMaxHostnameLength];
 };
 

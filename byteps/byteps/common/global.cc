@@ -41,6 +41,7 @@ bool BytePSGlobal::_is_distributed_job;
 bool BytePSGlobal::_is_cross_pcie_switch;
 uint32_t BytePSGlobal::_partition_bytes = 4096000;
 uint32_t BytePSGlobal::_min_compress_bytes = (1 << 16);
+int BytePSGlobal::_push_thread=1;
 
 int BytePSGlobal::_is_trace = 0;
 int BytePSGlobal::_start_step = 10;
@@ -116,6 +117,7 @@ void BytePSGlobal::Init() {
   _start_step = getenv("BYTEPS_TRACE_START_STEP")
                     ? atoi(getenv("BYTEPS_TRACE_START_STEP"))
                     : _start_step;
+  _push_thread=getenv("BYTEPS_PUSH_THREAD") ? atoi(getenv("BYTEPS_PUSH_THREAD")) : 1;
   _end_step = getenv("BYTEPS_TRACE_END_STEP")
                   ? atoi(getenv("BYTEPS_TRACE_END_STEP"))
                   : _end_step;
@@ -149,7 +151,7 @@ void BytePSGlobal::Init() {
   if (getenv("BYTEPS_FORCE_DISTRIBUTED")) {
     _is_distributed_job = atoi(getenv("BYTEPS_FORCE_DISTRIBUTED"));
   }
-  _is_distributed_job = (_num_worker > 1) ? true : _is_distributed_job;
+  _is_distributed_job = (_num_worker > 0) ? true : _is_distributed_job;
 
   if (_is_distributed_job) {
     BPS_CHECK(getenv("DMLC_NUM_SERVER"))
@@ -157,7 +159,7 @@ void BytePSGlobal::Init() {
 
     // set hash function
     _hash_knob = std::string(
-        getenv("BYTEPS_KEY_HASH_FN") ? getenv("BYTEPS_KEY_HASH_FN") : "djb2");
+        getenv("BYTEPS_KEY_HASH_FN") ? getenv("BYTEPS_KEY_HASH_FN") : "raw");
     _mixed_mode = getenv("BYTEPS_ENABLE_MIXED_MODE")
                       ? atoi(getenv("BYTEPS_ENABLE_MIXED_MODE"))
                       : false;
@@ -641,6 +643,8 @@ PSKV& BytePSGlobal::EncodeDefaultKey(uint64_t key, size_t len) {
     int server = 0;
     if (!_hash_knob.compare(std::string("naive"))) {
       server = Hash_Naive(key) % num_servers;
+    } else if(!_hash_knob.compare(std::string("raw"))){
+      server=key%num_servers;
     } else if (!_hash_knob.compare(std::string("built_in"))) {
       server = Hash_BuiltIn(key) % num_servers;
     } else if (!_hash_knob.compare(std::string("djb2"))) {
@@ -665,8 +669,9 @@ PSKV& BytePSGlobal::EncodeDefaultKey(uint64_t key, size_t len) {
                    << (100.0 * _server_accumulated_len[server] /
                        _total_accumulated_len)
                    << "%)";
-
+    
     ps::Key ps_key = krs[server].begin() + key;
+    BPS_LOG(DEBUG)<<"key "<<key<<" has ps_key:"<<ps_key<<"=krs[server="<<server<<"]+key "<<key;
     BPS_CHECK_LT(ps_key, krs[server].end());
     pskv.keys.push_back(ps_key);
     pskv.lens.push_back(len);

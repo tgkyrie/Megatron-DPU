@@ -43,7 +43,7 @@ size = _basics.size
 local_size = _basics.local_size
 rank = _basics.rank
 local_rank = _basics.local_rank
-
+get_pushpull_speed = _basics.get_pushpull_speed
 
 # Schema: handle -> input, output
 # We keep input in order to make sure it does not get garbage collected

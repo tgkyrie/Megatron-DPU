@@ -67,6 +67,9 @@ class BytePSGlobal {
   static int GetPcieSwitchIndex() {
     return _local_rank / _nccl_manager->GetSize();
   }
+  static int GetPushThread(){
+    return _push_thread;
+  }
   static int GetPcieSwitchNum() {
     return _local_size / _nccl_manager->GetSize();
   }
@@ -157,6 +160,7 @@ class BytePSGlobal {
   static BytePSRole _my_role;
   static std::shared_ptr<BytePSComm> _basic_comm;
   static std::shared_ptr<BytePSSharedMemory> _shm_obj;
+  static int _push_thread;
 
   static volatile BytePSScheduledQueue* _queues[QueueNum];
   static std::mutex _queues_mutex[QueueNum];

@@ -212,6 +212,12 @@ void BytePSServerEngineThread(int i) {
   }
 }  // namespace server
 
+inline uint64_t now_ns() {
+    struct timespec ts;
+    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+    return uint64_t(ts.tv_sec) * 1000000000ull + ts.tv_nsec;
+}
+
 void BytePSHandler(const ps::KVMeta& req_meta,
                    const ps::KVPairs<char>& req_data,
                    ps::KVServer<char>* server) {

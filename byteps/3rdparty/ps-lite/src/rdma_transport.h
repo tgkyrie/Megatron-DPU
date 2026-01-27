@@ -33,6 +33,7 @@ struct Endpoint {
   std::condition_variable cv;
   std::mutex connect_mu;
   struct rdma_cm_id *cm_id;
+  bool isDataPlane;
   std::shared_ptr<Transport> trans;
 
   int kStartDepth = 128;
@@ -62,6 +63,8 @@ struct Endpoint {
     kStartDepth = byteps_start_depth ? atoi(byteps_start_depth) : kStartDepth;
     kRxDepth = byteps_rx_depth ? atoi(byteps_rx_depth) : kRxDepth;
     kReplyDepth = kRxDepth;
+
+    isDataPlane=false;
 
     start_ctx = new WRContext[kStartDepth];
     reply_ctx = new WRContext[kReplyDepth];
@@ -124,6 +127,7 @@ struct Endpoint {
       ctx[i].type = type;
       ctx[i].buffer = mr;
       ctx[i].private_data = this;
+      ctx[i].dataPlane=false;
       queue->Push(&ctx[i]);
     }
   }

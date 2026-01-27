@@ -15,7 +15,8 @@ import torch.distributed as dist
 import torch.nn.functional as F
 import torch.optim as optim
 from torchvision import models
-
+import time
+import threading
 
 def parse_args():
     parser = argparse.ArgumentParser(
@@ -111,8 +112,7 @@ def main():
         "bucket_count": 0,
     }
     if args.comm_log:
-        import time
-        import threading
+
 
         _comm_lock = threading.Lock()
 
