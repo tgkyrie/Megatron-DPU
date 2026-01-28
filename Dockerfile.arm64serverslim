@@ -24,14 +24,14 @@ ENV MAKEFLAGS="-j$(nproc)"
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      ca-certificates tzdata \
-      git curl wget \
-      build-essential cmake autoconf automake libtool pkg-config binutils \
-      numactl libnuma-dev \
-      ibverbs-providers libibverbs-dev ibverbs-utils \
-      librdmacm-dev rdmacm-utils \
-      libssl-dev libffi-dev \
-      python3 python3-dev python3-pip python3-setuptools python3-wheel python-is-python3 \
+    ca-certificates tzdata \
+    git curl wget \
+    build-essential cmake autoconf automake libtool pkg-config binutils \
+    numactl libnuma-dev \
+    ibverbs-providers libibverbs-dev ibverbs-utils \
+    librdmacm-dev rdmacm-utils \
+    libssl-dev libffi-dev \
+    python3 python3-dev python3-pip python3-setuptools python3-wheel python-is-python3 \
     ; \
     rm -rf /var/lib/apt/lists/*; \
     python3 -m pip install --no-cache-dir -U pip setuptools wheel; \
@@ -42,11 +42,11 @@ WORKDIR /usr/local
 # 2) 先拷贝脚本（脚本变更不应该触发重编译时，可把这段放到更后面；这里保留也可以）
 #    如果你经常改 server.sh，建议把这段挪到“编译完成之后”再 COPY。
 COPY ./byteps/sh/server.sh \
-     ./byteps/sh/scheduler.sh \
-     ./byteps/sh/worker.sh \
-     ./byteps/sh/worker_ddp.sh \
-     ./byteps/sh/worker_single.sh \
-     /usr/local/
+    ./byteps/sh/scheduler.sh \
+    ./byteps/sh/worker.sh \
+    ./byteps/sh/worker_ddp.sh \
+    ./byteps/sh/worker_single.sh \
+    /usr/local/
 RUN set -eux; \
     chmod +x /usr/local/server.sh /usr/local/scheduler.sh /usr/local/worker.sh /usr/local/worker_ddp.sh /usr/local/worker_single.sh
 
@@ -57,22 +57,22 @@ COPY ./byteps/ ${BYTEPS_PATH}/
 RUN set -eux; \
     arch="$(dpkg --print-architecture)"; \
     if [ "$arch" = "arm64" ]; then \
-      echo "[arm64] patch setup.py flags + ps-lite flags"; \
-      sed -i -E \
-        -e "s/'-mno-avx512f',?[[:space:]]*//g" \
-        -e "s/'-msse2',?[[:space:]]*//g" \
-        -e "s/'-stdlib=libc\\+\\+',?[[:space:]]*//g" \
-        -e "s/'-march=native'/'-march=armv8-a'/g" \
-        "${BYTEPS_PATH}/setup.py"; \
-      if [ -d "${BYTEPS_PATH}/3rdparty/ps-lite" ]; then \
-        grep -RIl -- "-msse2" "${BYTEPS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-msse2([[:space:]]|$)/ /g'; \
-        grep -RIl -- "-mno-avx512f" "${BYTEPS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-mno-avx512f([[:space:]]|$)/ /g'; \
-      fi; \
+    echo "[arm64] patch setup.py flags + ps-lite flags"; \
+    sed -i -E \
+    -e "s/'-mno-avx512f',?[[:space:]]*//g" \
+    -e "s/'-msse2',?[[:space:]]*//g" \
+    -e "s/'-stdlib=libc\\+\\+',?[[:space:]]*//g" \
+    -e "s/'-march=native'/'-march=armv8-a'/g" \
+    "${BYTEPS_PATH}/setup.py"; \
+    if [ -d "${BYTEPS_PATH}/3rdparty/ps-lite" ]; then \
+    grep -RIl -- "-msse2" "${BYTEPS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-msse2([[:space:]]|$)/ /g'; \
+    grep -RIl -- "-mno-avx512f" "${BYTEPS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-mno-avx512f([[:space:]]|$)/ /g'; \
+    fi; \
     fi
 
 # 5) half_t 修复：arm64 server 编译时补 half_t=uint16_t
 RUN set -eux; \
-python3 - <<'PY'
+    python3 - <<'PY'
 import subprocess, re, sys
 from pathlib import Path
 
@@ -123,7 +123,7 @@ PY
 
 # 6) server-only：build_server 后直接 return，跳过 TF/Torch/MXNet
 RUN set -eux; \
-python3 - <<'PY'
+    python3 - <<'PY'
 from pathlib import Path
 import re, sys
 
@@ -164,7 +164,7 @@ RUN set -eux; \
 
 # 8) 打包 runtime 需要的文件
 RUN set -eux; \
-python3 - <<'PY'
+    python3 - <<'PY'
 import site, tarfile
 from pathlib import Path
 
@@ -205,17 +205,17 @@ WORKDIR /usr/local
 RUN set -eux; \
     apt-get update; \
     apt-get install -y --no-install-recommends \
-      ca-certificates tzdata \
-      bash iproute2 procps \
-      python3 python3-pip python-is-python3 \
-      libstdc++6 libgcc-s1 libgomp1 libffi8 \
-      numactl libnuma1 \
-      libzmq5 \
+    ca-certificates tzdata \
+    bash iproute2 procps \
+    python3 python3-pip python-is-python3 \
+    libstdc++6 libgcc-s1 libgomp1 libffi8 \
+    numactl libnuma1 \
+    libzmq5 \
     ; \
     if [ "$ENABLE_RDMA" = "1" ]; then \
-      apt-get install -y --no-install-recommends \
-        rdma-core ibverbs-providers libibverbs1 librdmacm1 \
-      ; \
+    apt-get install -y --no-install-recommends \
+    rdma-core ibverbs-providers libibverbs1 librdmacm1 \
+    ; \
     fi; \
     rm -rf /var/lib/apt/lists/*; \
     python3 -m pip install --no-cache-dir -U pip setuptools wheel; \
