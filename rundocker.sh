@@ -1,2 +1,0 @@
-# run docker
-sudo docker run -it   --gpus=all   --net=host   --shm-size=32768m   --ulimit memlock=-1 --ulimit stack=67108864   --device /dev/infiniband:/dev/infiniband   --cap-add IPC_LOCK   --name megatron-test-0   megatron-dpu:dev0.0.1 bash
