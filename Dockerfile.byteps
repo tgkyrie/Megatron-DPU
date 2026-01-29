@@ -1,5 +1,5 @@
 # BytePS 基础镜像，单独构建
-FROM pytorch/pytorch:2.2.2-cuda11.8-cudnn8-devel AS byteps
+FROM pytorch/pytorch:2.5.1-cuda11.8-cudnn9-devel AS byteps
 
 ARG http_proxy
 ARG https_proxy
