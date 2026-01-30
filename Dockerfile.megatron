@@ -1,5 +1,5 @@
 # Megatron 镜像，基于已构建的 BytePS 镜像
-ARG BYTEPS_IMAGE=tgkyrie/byteps:latest
+ARG BYTEPS_IMAGE=tgkyrie/byteps:01.28
 FROM ${BYTEPS_IMAGE}
 
 ARG BYTEPS_BASE_PATH=/usr/local
@@ -29,6 +29,13 @@ RUN git clone --depth 1 https://github.com/NVIDIA/apex.git ${BYTEPS_BASE_PATH}/a
 COPY ./vocab/ ${BYTEPS_BASE_PATH}/vocab/
 
 WORKDIR ${BYTEPS_BASE_PATH}
-RUN cd apex && python setup.py install --cuda_ext --cpp_ext
+
+# 加速点：自动使用 CPU 核数并行编译 apex（不改全局 PATH/CUDA_HOME）
+RUN cd apex && \
+    export MAX_JOBS="$(nproc)" && \
+    export CUDA_HOME=/usr/local/cuda-11.8 && \
+    export PATH="$CUDA_HOME/bin:$PATH" && \
+    export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH" && \
+    python setup.py install --cuda_ext --cpp_ext
 
 CMD ["bash"]

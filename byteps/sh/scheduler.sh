@@ -2,8 +2,8 @@
 set -e
 
 # ===== RDMA & BytePS 基本配置 =====
-export BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH:-512}
-export BYTEPS_RDMA_START_DEPTH=${BYTEPS_RDMA_START_DEPTH:-16}
+export BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH:-128}
+export BYTEPS_RDMA_START_DEPTH=${BYTEPS_RDMA_START_DEPTH:-8}
 export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
 
 # 集群规模（所有进程必须一致，如果想改，可以在外面 export 覆盖）
