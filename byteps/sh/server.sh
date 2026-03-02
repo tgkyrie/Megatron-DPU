@@ -35,8 +35,10 @@ export DMLC_PS_ROOT_PORT=${DMLC_PS_ROOT_PORT:-9010}
 # 本机 IP：自动按网卡查
 export DMLC_NODE_HOST=${DMLC_NODE_HOST:-$(detect_ip)}
 
-# server engine 线程
-export BYTEPS_SERVER_ENGINE_THREAD=${BYTEPS_SERVER_ENGINE_THREAD:-64}
+# server engine 线程：控制 server 处理 push/pull 请求、分区合并等的并行线程数
+# BYTEPS_OMP_THREAD_PER_GPU 控制单次 CPU 加法/拷贝时开多少线程
+# export BYTEPS_SERVER_ENGINE_THREAD=${BYTEPS_SERVER_ENGINE_THREAD:-4}
+export BYTEPS_OMP_THREAD_PER_GPU=${BYTEPS_OMP_THREAD_PER_GPU:-4}
 
 # ===== NUMA 绑定：默认按网卡对应 NUMA 节点自动检测 =====
 detect_numa_from_iface() {
@@ -78,7 +80,7 @@ NUMACTL_PREFIX=$(build_numactl_prefix "${NUMA_NODE}" "${CPU_LIST}")
 
 echo "[server] NUMA_NODE=${NUMA_NODE} CPU_LIST='${CPU_LIST}' ROOT=${DMLC_PS_ROOT_URI}:${DMLC_PS_ROOT_PORT} "\
      "NUM_WORKER=${DMLC_NUM_WORKER} NUM_SERVER=${DMLC_NUM_SERVER} "\
-     "IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST} ENGINE_THREAD=${BYTEPS_SERVER_ENGINE_THREAD}"
+     "IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST}"
 
 # 启动 server（后台），并确保退出时释放端口/进程
 ${NUMACTL_PREFIX} python3 - <<'PY' &
