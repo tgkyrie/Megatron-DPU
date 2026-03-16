@@ -122,7 +122,7 @@ class HybridDeviceOptimizer(torch.optim.Optimizer):
                     for param in _param_generator(optimizer):
                         gpu_param = self.cpu_copys_map_gpu_param[param]
                         gpu_param.data.copy_(param.data, non_blocking=True)
-                self._d2h_stream.record_event().wait(torch.cuda.current_stream())
+                self._h2d_stream.record_event().wait(torch.cuda.current_stream())
 
             return param_copy_back_gpu_hook
 
@@ -159,7 +159,7 @@ class HybridDeviceOptimizer(torch.optim.Optimizer):
         # the lr, wd, etc. are up-to-date.
         self._sync_hdo_param_groups_to_sub_optimizers()
 
-        self._d2h_stream.wait_stream(torch.cuda.current_stream())
+        # self._d2h_stream.wait_stream(torch.cuda.current_stream())
         with torch.cuda.stream(self._d2h_stream):
             self._set_sub_optimizer_grads()
 

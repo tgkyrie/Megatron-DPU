@@ -5,6 +5,8 @@ import torch
 from megatron.core.parallel_state import get_global_memory_buffer
 from megatron.core.utils import get_tensor_model_parallel_group_if_none, is_torch_min_version
 
+import byteps.torch as bps
+
 from .utils import split_tensor_along_last_dim
 
 try:
@@ -31,6 +33,25 @@ def _reduce(input_, group):
     torch.distributed.all_reduce(input_.contiguous(), group=group)
 
     return input_
+
+def _bps_reduce(input_,group):
+    assert group is not None, "group should not be None"
+
+    # Bypass the function if we are using only 1 GPU.
+    if group.size() == 1:
+        return input_
+
+    # All-reduce.
+    # torch.distributed.all_reduce(input_.contiguous(), group=group)
+    output_ = bps.push_pull(
+                    input_,
+                    average=False,
+                    name="TP",
+                    version=0,
+                    priority=0
+                )
+
+    return output_
 
 
 def _split_along_last_dim(input_, group):
@@ -232,6 +253,23 @@ class _ReduceFromModelParallelRegion(torch.autograd.Function):
         """Backward function."""
         return grad_output, None
 
+class _BpsReduceFromModelParallelRegion(torch.autograd.Function):
+    """Use DPU All-reduce the input from the model parallel region."""
+
+    @staticmethod
+    def symbolic(graph, input_, group):
+        """Symbolic function for tracing."""
+        return _reduce(input_, group)
+
+    @staticmethod
+    def forward(ctx, input_, group):
+        """Forward function."""
+        return _reduce(input_, group)
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        """Backward function."""
+        return grad_output, None
 
 class _ScatterToModelParallelRegion(torch.autograd.Function):
     """Split the input and keep only the corresponding chuck to the rank."""
@@ -476,7 +514,9 @@ def reduce_from_tensor_model_parallel_region(input_, group=None):
     """Wrapper for autograd function: forward: all reduce, backward copy"""
     group = get_tensor_model_parallel_group_if_none(group)
     return _ReduceFromModelParallelRegion.apply(input_, group)
-
+def bps_reduce_from_tensor_model_parallel_region(input_,group=None):
+    group = get_tensor_model_parallel_group_if_none(group)
+    return _ReduceFromModelParallelRegion.apply(input_, group)
 
 def scatter_to_tensor_model_parallel_region(input_, group=None):
     """Wrapper for autograd function: forward: RS, backward: AG <last dim>"""

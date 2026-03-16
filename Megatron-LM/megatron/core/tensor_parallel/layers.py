@@ -35,6 +35,7 @@ from .mappings import (
     gather_from_sequence_parallel_region,
     gather_from_tensor_model_parallel_region,
     reduce_from_tensor_model_parallel_region,
+    bps_reduce_from_tensor_model_parallel_region,
     reduce_scatter_to_sequence_parallel_region,
     scatter_to_tensor_model_parallel_region,
 )
@@ -1271,7 +1272,10 @@ class RowParallelLinear(torch.nn.Module):
                 output_parallel, group=self.tp_group
             )
         else:
-            output_ = reduce_from_tensor_model_parallel_region(output_parallel, group=self.tp_group)
+            if self.config.use_dpu_reduce:
+                output_ = bps_reduce_from_tensor_model_parallel_region(output_parallel,group=self.tp_group)
+            else:    
+                output_ = reduce_from_tensor_model_parallel_region(output_parallel, group=self.tp_group)
         if not self.skip_bias_add:
             output = (output_ + self.bias) if self.bias is not None else output_
             output_bias = None
