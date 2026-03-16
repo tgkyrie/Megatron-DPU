@@ -13,6 +13,7 @@ import torch
 from torch.distributed import _coalescing_manager
 
 import byteps.torch as bps
+from byteps.torch import ops as bps_ops
 
 import megatron.core.nccl_allocator as nccl_allocator
 from megatron.core import parallel_state
@@ -388,33 +389,44 @@ class _ParamAndGradBucketGroup:
                 and getattr(self.ddp_config, "use_dpu_reduce", False)):
 
             # 先不支持 overlap，强行同步
-            assert not self.ddp_config.overlap_grad_reduce, \
-                "暂不支持 BytePS + overlap_grad_reduce，请先关闭 overlap_grad_reduce"
+            # assert not self.ddp_config.overlap_grad_reduce, \
+            #     "暂不支持 BytePS + overlap_grad_reduce，请先关闭 overlap_grad_reduce"
 
             # 根据 average_in_collective 决定 BytePS 是做 SUM 还是 AVG
             # 注意：上面已经做过 gradient_scaling_factor *= ，这里要保持语义一致
             byteps_average = self.ddp_config.average_in_collective
 
-            # 遍历每个 bucket，同步 push_pull
-            for idx, bucket in enumerate(self.buckets):
-                # 为 BytePS 构造一个稳定的 name，确保所有 rank 一致
-                name = f"dp_bucket_{idx}"
-
-                # BytePS 返回的是新的 tensor，不是 in-place，要拷回去
-                reduced = bps.push_pull(
-                    bucket.grad_data,
-                    average=byteps_average,
-                    name=name,
-                    version=0,
-                    priority=0
-                )
-                bucket.grad_data.copy_(reduced)
-                # bps.push_pull_inplace(bucket.grad_data,average=byteps_average,name=name)
-
-
-            # 整个操作是同步完成的，不存在异步 handle
-            self.grad_reduce_handle = None
-            return
+            if async_op:
+                handles = []
+                for _, bucket in enumerate(self.buckets):
+                    # 为 BytePS 构造一个稳定且全局唯一的 name，确保所有 rank 一致
+                    name = f"dp_bucket_{bucket.bucket_id}"
+                    handle = bps_ops.push_pull_async(
+                        bucket.grad_data,
+                        average=byteps_average,
+                        name=name,
+                        version=0,
+                        priority=0,
+                    )
+                    handles.append((handle, bucket))
+                self.grad_reduce_handle = handles
+                return
+            else:
+                for _, bucket in enumerate(self.buckets):
+                    # 为 BytePS 构造一个稳定且全局唯一的 name，确保所有 rank 一致
+                    name = f"dp_bucket_{bucket.bucket_id}"
+                    # BytePS 返回的是新的 tensor，不是 in-place，要拷回去
+                    reduced = bps.push_pull(
+                        bucket.grad_data,
+                        average=byteps_average,
+                        name=name,
+                        version=0,
+                        priority=0,
+                    )
+                    bucket.grad_data.copy_(reduced)
+                # 整个操作是同步完成的，不存在异步 handle
+                self.grad_reduce_handle = None
+                return
 
 
         # Coalesce communication kernels across buckets in the bucket group.
@@ -498,12 +510,25 @@ class _ParamAndGradBucketGroup:
         if self.ddp_config.num_distributed_optimizer_instances > 1:
             torch.cuda.default_stream().wait_stream(self.communication_stream)
             return
-        assert self.grad_reduce_handle is not None, (
-            f"Communication call has not been issued for this bucket "
-            f"({len(self.params_with_grad)}/{len(self.params)} params have grad available)"
-        )
-        self.grad_reduce_handle.wait()
-        self.grad_reduce_handle = None
+        
+        if not getattr(self.ddp_config, "use_dpu_reduce", False):
+            assert self.grad_reduce_handle is not None, (
+                f"Communication call has not been issued for this bucket "
+                f"({len(self.params_with_grad)}/{len(self.params)} params have grad available)"
+            )
+            self.grad_reduce_handle.wait()
+            self.grad_reduce_handle = None
+
+        else:
+            assert self.grad_reduce_handle is not None, (
+                f"BytePS Communication call has not been issued for this bucket "
+                f"({len(self.params_with_grad)}/{len(self.params)} params have grad available)"
+            )
+            handles = self.grad_reduce_handle
+            for handle, bucket in handles:
+                reduced = bps_ops.synchronize(handle)
+                bucket.grad_data.copy_(reduced)
+            self.grad_reduce_handle = None
 
     def register_grad_ready(self, param: torch.nn.Parameter):
         """
