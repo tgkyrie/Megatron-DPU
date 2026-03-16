@@ -33,7 +33,7 @@ WORKDIR ${BYTEPS_BASE_PATH}
 # 加速点：自动使用 CPU 核数并行编译 apex（不改全局 PATH/CUDA_HOME）
 RUN cd apex && \
     export MAX_JOBS="$(nproc)" && \
-    export CUDA_HOME=/usr/local/cuda-11.8 && \
+    export CUDA_HOME=/usr/local/cuda && \
     export PATH="$CUDA_HOME/bin:$PATH" && \
     export LD_LIBRARY_PATH="$CUDA_HOME/lib64:$LD_LIBRARY_PATH" && \
     python setup.py install --cuda_ext --cpp_ext
