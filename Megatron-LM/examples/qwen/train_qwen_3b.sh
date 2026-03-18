@@ -4,8 +4,8 @@
 # Environment variables
 ############################################
 export CUDA_DEVICE_MAX_CONNECTIONS=${CUDA_DEVICE_MAX_CONNECTIONS:-1}
-export CUDA_HOME=/usr/local/cuda-11.8
-export LD_LIBRARY_PATH=/usr/local/cuda-11.8/lib64:$LD_LIBRARY_PATH
+export CUDA_HOME=/usr/local/cuda
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
 
 export NCCL_DEBUG=INFO
 export NCCL_DEBUG_SUBSYS=COLL
@@ -38,9 +38,9 @@ DATA_ARG=${4:-"MOCK"}        # data prefix or MOCK
 ############################################
 # Distributed setup
 ############################################
-GPUS_PER_NODE=1  # 每台机器上的 GPU 数
-NUM_NODES=2     # 机器总数
-MASTER_ADDR=${MASTER_ADDR:-192.168.1.13}
+GPUS_PER_NODE=${GPUS_PER_NODE:-1}  # 每台机器上的 GPU 数
+NUM_NODES=${NUM_NODES:-2}     # 机器总数
+MASTER_ADDR=${MASTER_ADDR:-192.168.1.10}
 MASTER_PORT=${MASTER_PORT:-19002}
 WORLD_SIZE=$(($GPUS_PER_NODE*$NUM_NODES))
 
@@ -58,8 +58,10 @@ TP_SIZE=1
 CP_SIZE=1
 PP_SIZE=1
 
-MICRO_BATCH_SIZE=2
-GLOBAL_BATCH_SIZE=256
+# MICRO_BATCH_SIZE=2
+# GLOBAL_BATCH_SIZE=256
+MICRO_BATCH_SIZE=1
+GLOBAL_BATCH_SIZE=4
 
 NUM_LAYERS=8
 HIDDEN_SIZE=2048
@@ -67,7 +69,7 @@ NUM_HEADS=16
 FFN_HIDDEN_SIZE=5504
 KV_CHANNELS=128
 
-SEQ_LENGTH=2048
+SEQ_LENGTH=512
 MAX_POSITION_EMBEDDINGS=2048
 
 DTYPE="fp8"   # fp8 | bf16
