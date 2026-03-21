@@ -45,8 +45,8 @@ def main():
         dist.all_reduce(tensor, async_op=False)
         torch.cuda.synchronize()
 
-    if rank == 0:
-        print(f"[allreduce] world_size={world_size} size_mb={args.size_mb} dtype={args.dtype}")
+    #if rank == 0:
+    print(f"[allreduce] world_size={world_size} size_mb={args.size_mb} dtype={args.dtype}")
 
     # warmup
     for _ in range(args.warmup):
@@ -58,7 +58,7 @@ def main():
         t0 = time.time()
         do_allreduce()
         dur_ms = (time.time() - t0) * 1000.0
-        if rank == 0:
+        if True:
             bytes_len = args.size_mb * 1024 * 1024
             sec = dur_ms / 1000.0
             per_rank_GBps = bytes_len / sec / 1e9

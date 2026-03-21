@@ -14,6 +14,7 @@ import torch
 import byteps.torch as bps
 from byteps.torch.ops import push_pull_group_sync_inplace as byteps_push_pull_group
 from byteps.torch.ops import get_pushpull_speed
+from byteps.torch.ops_gdr import allreduce
 
 
 def parse_args():
@@ -24,7 +25,7 @@ def parse_args():
                    help="正式迭代次数")
     p.add_argument("--warmup", type=int, default=5,
                    help="热身次数")
-    p.add_argument("--dtype", type=str, default="float32",
+    p.add_argument("--dtype", type=str, default="float16",
                    help="数据类型 (float32/float16)")
     p.add_argument("--cpu-tensor",default=False,action="store_true",
                    help="cpu tensor")
@@ -36,6 +37,9 @@ def push_pull_grad_group_sync(tensor):
     handle, grad_count = byteps_push_pull_group(tensor, average=True,
             name="Gradient."+name)
     return handle, grad_count
+
+def do_allreduce(tensor):
+    allreduce(tensor,False,True,"test")
 
 def main():
     args = parse_args()
@@ -64,8 +68,8 @@ def main():
     def do_push_pull():
         # bps.push_pull(tensor, average=True, name="bench")
         handle,gc=push_pull_grad_group_sync(tensor)
-        if not args.cpu_tensor:
-            torch.cuda.synchronize()
+        # if not args.cpu_tensor:
+            # torch.cuda.synchronize()
         return handle
     if rank == 0:
         print(
@@ -77,8 +81,9 @@ def main():
     # warmup
     # ---------------------------
     for _ in range(args.warmup):
-        handle=do_push_pull()
-        bps.synchronize(handle=handle)
+        # handle=do_push_pull()
+        # bps.synchronize(handle=handle)
+        do_allreduce(tensor)
 
     # ---------------------------
     # benchmark
@@ -86,11 +91,12 @@ def main():
     for i in range(args.iters):
         time.sleep(0.5)
         t0 = time.time()
-        handle=do_push_pull()
-        bps.synchronize(handle=handle)
+        # handle=do_push_pull()
+        # bps.synchronize(handle=handle)
+        do_allreduce(tensor)
         dur_ms = (time.time() - t0) * 1000.0
 
-        if rank == 0:
+        if True:
             bytes_len = args.size_mb * 1024 * 1024
             sec = dur_ms / 1000.0
 

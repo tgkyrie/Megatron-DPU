@@ -194,6 +194,46 @@ struct Control {
   /** message signature */
   uint64_t msg_sig;
 };
+
+
+// class TensorEvent {
+//  public:
+//   TensorEvent() : is_recorded_(false), is_released_(true) {
+//     ev_ = Backend::Get()->CreateEvent();
+//   }
+
+//   ~TensorEvent() { Backend::Get()->FreeEvent(ev_); }
+
+//   void Record(void* stream = nullptr) {
+//     int result = Backend::Get()->RecordEvent(ev_, stream);
+//     is_recorded_ = (result == BACKEND_OK);
+//   }
+
+//   void Sync() {
+//     if (is_recorded_) {
+//       int result = Backend::Get()->SyncEvent(ev_);
+//       if (result != BACKEND_OK) {
+//         PS_LOG(WARNING) << "failed to sync cuda event";
+//       }
+//     }
+//     is_recorded_ = false;
+//   }
+
+//   void Release() { is_released_ = true; }
+
+//   bool Occupy() {
+//     if (is_released_) {
+//       is_released_ = false;
+//       return true;
+//     }
+//     return false;
+//   }
+
+//  private:
+//   bool is_recorded_;
+//   bool is_released_;
+//   void* ev_ = nullptr;
+// };
 /**
  * \brief meta info of a message
  */

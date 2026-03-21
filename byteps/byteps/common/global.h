@@ -73,6 +73,8 @@ class BytePSGlobal {
   static int GetPcieSwitchNum() {
     return _local_size / _nccl_manager->GetSize();
   }
+
+  static bool IsUseGDR() {return _use_gdr;}
   static bool IsRootDevice() { return _is_root_device; }
   static bool IsDistributed() { return _is_distributed_job; }
   static bool IsCrossPcieSwitch() { return _is_cross_pcie_switch; }
@@ -154,6 +156,7 @@ class BytePSGlobal {
   static int _local_size;
   static int _worker_id;
   static int _num_worker;
+  static bool _use_gdr;
   static bool _is_root_device;
   static bool _is_distributed_job;
   static bool _is_cross_pcie_switch;

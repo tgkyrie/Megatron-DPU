@@ -33,6 +33,8 @@ void byteps_init();
 // C interface to initialize byteps (without initializing ps-lite).
 void byteps_lazy_init();
 
+void byteps_lazy_init_for_gdr();
+
 // C interface to shut down byteps.
 void byteps_shutdown();
 

@@ -667,6 +667,8 @@ class RDMAVan : public Van {
                              IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE))
             << "Failed to register the memory region: " << strerror(errno)
             << ", sa.size()=" << sa.size();
+        PS_VLOG(1) << "Register Mem .Sa Size"<<sa.size();
+          
         // LOG(INFO)<<"Register Mem for "<<sa.data()<<std::flush;
         mem_mr_[sa.data()] = temp_mr;
       }
@@ -684,6 +686,7 @@ class RDMAVan : public Van {
                              IBV_ACCESS_LOCAL_WRITE | IBV_ACCESS_REMOTE_WRITE))
             << "Failed to register the memory region: " << strerror(errno);
         // LOG(INFO)<<"Register Mem for "<<addr<<std::flush;
+        PS_VLOG(1) << "Register Mem .val_len "<<msg.meta.val_len;
         mem_mr_[addr] = temp_mr;
       }
     }

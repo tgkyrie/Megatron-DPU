@@ -37,6 +37,7 @@ int BytePSGlobal::_worker_id = 0;
 int BytePSGlobal::_num_worker = 1;
 BytePSRole BytePSGlobal::_my_role;
 bool BytePSGlobal::_is_root_device;
+bool BytePSGlobal::_use_gdr = false;
 bool BytePSGlobal::_is_distributed_job;
 bool BytePSGlobal::_is_cross_pcie_switch;
 uint32_t BytePSGlobal::_partition_bytes = 4096000;
@@ -112,6 +113,7 @@ void BytePSGlobal::Init() {
   }
 
   // Set the profiling-related variables
+  _use_gdr = getenv("DMLC_USE_GDR") ? atoi(getenv("DMLC_USE_GDR")) : false;
   _is_trace =
       getenv("BYTEPS_TRACE_ON") ? atoi(getenv("BYTEPS_TRACE_ON")) : _is_trace;
   _start_step = getenv("BYTEPS_TRACE_START_STEP")

@@ -39,6 +39,9 @@ void CompressLoop();
 
 void PushLoop();
 
+void PushLoopGDR();
+
+void PullLoopGDR();
 void PullLoop();
 
 void DecompressLoop();

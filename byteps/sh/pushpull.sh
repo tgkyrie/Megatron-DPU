@@ -48,4 +48,4 @@ echo "[worker ${WORKER_ID}] ROOT=${DMLC_PS_ROOT_URI}:${DMLC_PS_ROOT_PORT} "\
      "IF=${DMLC_INTERFACE}"
 
 exec bpslaunch python3 /usr/local/byteps/example/pytorch/pushpull_bench.py \
-    --size-mb 16000 --iters 50 
+    --size-mb 50 --iters 50 

@@ -581,6 +581,92 @@ bool RunPushLoopOnce() {
   return true;
 }
 
+bool RunGDRPushLoopOnce(){
+  QueueType this_op = PUSH;
+  auto q = BytePSGlobal::GetScheduledQueue(this_op);
+  auto task = q->getTask();
+  if (task) {
+    BPS_CHECK(BytePSGlobal::IsRootDevice())
+        << "only root device should enter PUSH loop";
+    auto tensor=task->tensor;
+    if (BytePSGlobal::IsDistributed()) {
+      auto offset = task->offset;
+      auto len = task->len;
+
+      char *data;
+      // BPS_CHECK(task->cpubuff);
+      if(task->cpubuff){
+        data =
+          const_cast<char *>(static_cast<const char *>(task->cpubuff) + offset);
+      }else{
+        data =
+           const_cast<char *>(static_cast<const char *> ( (char*)(tensor->data()) + offset ) );
+      }
+      
+
+      // get metadata
+      const int dtype = task->tensor->dtype();
+
+
+      // false means not to delete data when SArray is deleted
+      ps::SArray<char> vals(data, len, false);
+
+      int cmd = GetCommandType(RequestType::kDefaultPushPull, dtype);
+      auto &pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
+      BytePSGlobal::GetPS()->ZPush(pskv.keys, vals, pskv.lens, cmd,
+                                   [task, q]() { FinishOrProceed(task); });
+    } else {
+      // This is a dummy barrier for IsCrossPcieSwitch()
+      BPS_CHECK(BytePSGlobal::IsCrossPcieSwitch());
+      FinishOrProceed(task);
+    }
+  } else {
+    std::this_thread::sleep_for(std::chrono::nanoseconds(1000));
+  }
+  return true;
+}
+
+
+bool RunGDRPullLoopOnce() {
+  QueueType this_op = PULL;
+  auto q = BytePSGlobal::GetScheduledQueue(this_op);
+  auto task = q->getTask();
+  if (task) {
+    BPS_CHECK(BytePSGlobal::IsRootDevice())
+        << "only root device should enter PULL loop";
+    auto tensor=task->tensor;
+    // TODO: allow merging
+    auto offset = task->offset;
+    auto len = task->len;
+    
+    char *data;
+    if(task->cpubuff){
+      data =
+        const_cast<char *>(static_cast<const char *>(task->cpubuff) + offset);
+    }else{
+      data =
+        const_cast<char *>(static_cast<const char *> ( (char*)(tensor->data()) + offset ) );
+    }
+    // get metadata
+    const int dtype = task->output->dtype();
+
+    // false means not to delete data when SArray is deleted
+    auto vals = new ps::SArray<char>(data, len, false);
+
+    int cmd = GetCommandType(RequestType::kDefaultPushPull, dtype);
+    auto &pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
+    // issue pull
+    BytePSGlobal::GetPS()->ZPull(pskv.keys, vals, &pskv.lens, cmd,
+                                 [vals, task, q]() {
+                                   delete vals;
+                                   FinishOrProceed(task);
+                                 });
+  } else {
+    std::this_thread::sleep_for(std::chrono::nanoseconds(1000));
+  }
+  return true;
+}
+
 bool RunPullLoopOnce() {
   QueueType this_op = PULL;
   auto q = BytePSGlobal::GetScheduledQueue(this_op);
@@ -816,6 +902,18 @@ void CompressLoop() {
 
 void PushLoop() {
   while (RunPushLoopOnce() && !BytePSGlobal::ShouldShutdown()) {
+  }
+  BytePSGlobal::ReportThreadFinish();
+}
+
+void PushLoopGDR(){
+  while (RunGDRPushLoopOnce() && !BytePSGlobal::ShouldShutdown()) {
+  }
+  BytePSGlobal::ReportThreadFinish();
+}
+
+void PullLoopGDR(){
+  while (RunGDRPullLoopOnce() && !BytePSGlobal::ShouldShutdown()) {
   }
   BytePSGlobal::ReportThreadFinish();
 }

@@ -178,6 +178,10 @@ struct RequestContext {
 // <remote_addr, rkey, idx, local_addr>
 typedef std::tuple<uint64_t, uint32_t, uint32_t, MessageBuffer *> RemoteTuple;
 
+// GDR 
+// <remote_addr, rkey, idx, local_addr,data_addr,data_rkey>
+// typedef std::tuple<uint64_t, uint32_t, uint32_t, MessageBuffer *,uint64_t,uint32_t> RemoteTuple;
+
 // recver, <remote_addr, rkey, idx>
 typedef std::unordered_map<int, RemoteTuple> RemoteAndLocalAddress;
 

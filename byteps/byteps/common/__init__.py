@@ -56,7 +56,7 @@ class BytePSBasics(object):
         full_path = get_extension_full_path(pkg_path, *args)
         self.C_LIB_CTYPES = ctypes.CDLL(full_path, mode=ctypes.RTLD_GLOBAL)
 
-    def init(self, lazy=True):
+    def init(self, lazy=False):
         """A function that inits BytePS."""
         atexit.register(self.shutdown)
         if lazy:

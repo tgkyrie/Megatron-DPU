@@ -141,6 +141,7 @@ struct Endpoint {
     attr.cap.max_recv_wr = kRxDepth;
     attr.cap.max_send_sge = kSGEntry;
     attr.cap.max_recv_sge = kSGEntry;
+    attr.cap.max_inline_data=256;
     attr.qp_type = IBV_QPT_RC;
     attr.sq_sig_all = 0;
 
@@ -198,7 +199,7 @@ struct Endpoint {
 class Transport {
  public:
   virtual void RDMAWriteWithImm(MessageBuffer *msg_buf, uint64_t remote_addr,
-                                uint32_t rkey, uint32_t idx) = 0;
+                                uint32_t rkey, uint32_t idx,bool inline_write=false,struct ibv_send_wr *prev_wr = nullptr) = 0;
 
   virtual int RecvPushRequest(Message *msg, BufferContext *buffer_ctx,
                               int meta_len) = 0;
@@ -242,7 +243,9 @@ class RDMATransport : public Transport {
   ~RDMATransport(){};
 
   virtual void RDMAWriteWithImm(MessageBuffer *msg_buf, uint64_t remote_addr,
-                                uint32_t rkey, uint32_t idx) {
+                                uint32_t rkey, uint32_t idx,
+                                bool inline_write=false,
+                                struct ibv_send_wr *prev_wr = nullptr) {
     struct ibv_sge sge;
     sge.addr = reinterpret_cast<uint64_t>(msg_buf->inline_buf);
     sge.length = msg_buf->inline_len;
@@ -260,7 +263,63 @@ class RDMATransport : public Transport {
     wr.wr.rdma.remote_addr = remote_addr;
     wr.wr.rdma.rkey = rkey;
 
-    CHECK_EQ(ibv_post_send(endpoint_->cm_id->qp, &wr, &bad_wr), 0)
+    if (inline_write) {
+      wr.send_flags |= IBV_SEND_INLINE;
+    }
+    int ret=0;
+    if (prev_wr){
+      prev_wr->next=&wr;
+      ret=ibv_post_send(endpoint_->cm_id->qp,prev_wr,&bad_wr);
+    }else{
+      ret = ibv_post_send(endpoint_->cm_id->qp, &wr, &bad_wr);
+    }
+    if (ret != 0) {
+      // --- 详细调试信息开始 ---
+      
+      // 获取 QP 状态字符串
+      const char* qp_state_str = "UNKNOWN";
+      if (endpoint_->cm_id->qp) {
+        switch (endpoint_->cm_id->qp->state) {
+          case IBV_QPS_RESET: qp_state_str = "RESET"; break;
+          case IBV_QPS_INIT: qp_state_str = "INIT"; break;
+          case IBV_QPS_RTR: qp_state_str = "RTR"; break;
+          case IBV_QPS_RTS: qp_state_str = "RTS"; break;
+          case IBV_QPS_SQD: qp_state_str = "SQD"; break;
+          case IBV_QPS_SQE: qp_state_str = "SQE"; break;
+          case IBV_QPS_ERR: qp_state_str = "ERR"; break;
+          default: qp_state_str = "UNKNOWN"; break;
+        }
+      }
+
+      // 检查内存是否真的被注册了 (尝试反向查找，如果 allocator 支持的话，这里只是打印原始值)
+      // 注意：如果 lkey 是 0 或 0xffffffff，通常意味着未注册
+      
+      LOG(FATAL) << "\n========== RDMA WRITE FAILURE DUMP =========="
+               << "\n[Error Code] errno: " << strerror(errno) << " (" << errno << ")"
+               << "\n[ret] ret:" << ret
+               << "\n[QP State]   Current State: " << qp_state_str 
+               << " (If ERR, previous operation failed)"
+               << "\n[WR Info]    Opcode: IBV_WR_RDMA_WRITE_WITH_IMM"
+               << "\n             WR_ID: " << std::hex << wr.wr_id << std::dec
+               << "\n             Imm Data: " << idx
+               << "\n             Send Flags: " << std::hex << wr.send_flags << std::dec
+               << (inline_write ? " (INLINE)" : " (NO INLINE)")
+               << "\n[SGE Info]   Local Addr:  " << std::hex << sge.addr << std::dec
+               << "\n             Length:     " << sge.length
+               << "\n             LKey:       " << std::hex << sge.lkey << std::dec
+               << (sge.lkey == 0 || sge.lkey == 0xffffffff ? " [WARNING: Invalid LKey!]" : "")
+               << "\n[Remote Info] Remote Addr: " << std::hex << remote_addr << std::dec
+               << "\n             Remote RKey: " << std::hex << rkey << std::dec
+               << (rkey == 0 || rkey == 0xffffffff ? " [WARNING: Invalid RKey!]" : "")
+               << "\n[Bad WR]     Failed WR ID: " << (bad_wr ? std::to_string(bad_wr->wr_id) : "nullptr")
+               << "\n[Context]    MsgBuf Ptr: " << msg_buf
+               << "\n             Inline Buf: " << msg_buf->inline_buf
+               << "\n             Inline Len: " << msg_buf->inline_len
+               << "\n=============================================";
+               
+      // 程序会在这里终止，因为 LOG(FATAL)
+    }
+    CHECK_EQ(ret, 0)
         << "ibv_post_send failed.";
   }
 
@@ -292,6 +351,7 @@ class RDMATransport : public Transport {
     wr.sg_list = &sge;
     wr.num_sge = 1;
 
+    PS_VLOG(1) << "SendRendezvousBegin ";
     CHECK_EQ(ibv_post_send(endpoint_->cm_id->qp, &wr, &bad_wr), 0)
         << strerror(errno);
   }
@@ -343,7 +403,7 @@ class RDMATransport : public Transport {
     wr.send_flags = IBV_SEND_SIGNALED;
     wr.sg_list = &sge;
     wr.num_sge = 1;
-
+    PS_VLOG(1) << "SendRendezvousReply ";
     CHECK_EQ(ibv_post_send(endpoint_->cm_id->qp, &wr, &bad_wr), 0)
         << "ibv_post_send failed.";
   }
@@ -353,15 +413,29 @@ class RDMATransport : public Transport {
     auto rkey = std::get<1>(remote_tuple);
     auto idx = std::get<2>(remote_tuple);
 
-    RDMAWriteWithImm(msg_buf, raddr, rkey, idx);
+    RDMAWriteWithImm(msg_buf, raddr, rkey, idx,true);
   }
 
   void SendPushRequest(Message &msg, MessageBuffer *msg_buf,
                        RemoteTuple remote_tuple) {
     CHECK_EQ(msg_buf->mrs.size(), 1);
-    auto raddr = std::get<0>(remote_tuple);
-    auto rkey = std::get<1>(remote_tuple);
-    auto idx = std::get<2>(remote_tuple);
+    // #ifdef USE_GDR
+    //     auto meta_raddr = std::get<0>(remote_tuple);
+    //     auto meta_rkey = std::get<1>(remote_tuple);
+    //     auto idx = std::get<2>(remote_tuple);
+    //     auto data_raddr = std::get<4>(remote_tuple);
+    //     auto data_rkey = std::get<5>(remote_tuple);
+    // #else
+        // CPU Server didnt have GDR, So Write To Meta+inline_len as before
+        auto meta_raddr = std::get<0>(remote_tuple);
+        auto meta_rkey = std::get<1>(remote_tuple);
+        auto idx = std::get<2>(remote_tuple);
+        auto data_raddr = meta_raddr + align_ceil(msg_buf->inline_len, pagesize_);
+        auto data_rkey = meta_rkey;
+    // #endif
+    // auto raddr = std::get<0>(remote_tuple);
+    // auto rkey = std::get<1>(remote_tuple);
+    // auto idx = std::get<2>(remote_tuple);
 
     // push request, split the meta and data into two writes
     // further, it does not send keys and lens since these meta already carries
@@ -384,16 +458,16 @@ class RDMATransport : public Transport {
     wr.next = nullptr;
     wr.sg_list = &my_sge;
     wr.num_sge = 1;
-    wr.wr.rdma.rkey = rkey;
+    wr.wr.rdma.rkey = data_rkey;
 
     // write to the next page-aligned address (remote_addr should already be
     // aligned)
-    wr.wr.rdma.remote_addr = raddr + align_ceil(msg_buf->inline_len, pagesize_);
+    // wr.wr.rdma.remote_addr = raddr + align_ceil(msg_buf->inline_len, pagesize_);
+    wr.wr.rdma.remote_addr = data_raddr;
+    // CHECK_EQ(ibv_post_send(endpoint_->cm_id->qp, &wr, &bad_wr), 0)
+    //     << "ibv_post_send failed.";
 
-    CHECK_EQ(ibv_post_send(endpoint_->cm_id->qp, &wr, &bad_wr), 0)
-        << "ibv_post_send failed.";
-
-    RDMAWriteWithImm(msg_buf, raddr, rkey, idx);
+    RDMAWriteWithImm(msg_buf, meta_raddr, meta_rkey, idx,true,&wr);
   }
 
   void SendPullRequest(Message &msg, MessageBuffer *msg_buf,
@@ -421,6 +495,16 @@ class RDMATransport : public Transport {
     sge.addr = reinterpret_cast<uint64_t>(msg_buf->data[1].data());
     sge.length = len;
     sge.lkey = lkey;
+  
+    #ifdef USE_GDR
+        auto meta_raddr = std::get<0>(remote_tuple);
+        auto meta_rkey = std::get<1>(remote_tuple);
+        auto idx = std::get<2>(remote_tuple);
+    #else
+        auto meta_raddr = std::get<0>(remote_tuple);
+        auto meta_rkey = std::get<1>(remote_tuple);
+        auto idx = std::get<2>(remote_tuple);
+    #endif
 
     // this rdma-write will not trigger any signal both remotely and locally
     struct ibv_send_wr wr, *bad_wr = nullptr;
@@ -437,7 +521,8 @@ class RDMATransport : public Transport {
         << "ibv_post_send failed.";
 
     // after write keys/vals/lens (no imm), write the meta (with imm)
-    Send(msg, msg_buf, remote_tuple);
+    // Send(msg, msg_buf, remote_tuple);
+    RDMAWriteWithImm(msg_buf, meta_raddr, meta_rkey, idx, true);
   }
 
   virtual int RecvPushResponse(Message *msg, BufferContext *buffer_ctx,

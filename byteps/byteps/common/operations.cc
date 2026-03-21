@@ -15,11 +15,11 @@
 
 #include <cuda_runtime.h>
 #include <unistd.h>
-
+#include <torch/extension.h>
 #include <cstring>
 #include <memory>
 #include <thread>
-
+#include <string>
 #include "compressor/compressor.h"
 #include "compressor/compressor_registry.h"
 #include "compressor/utils.h"
@@ -34,8 +34,32 @@ namespace common {
 extern "C" {
 
 void byteps_init() {
-  byteps_lazy_init();
+  int use_gdr=std::stoi(getenv("DMLC_USE_GDR"));
+  if(use_gdr){
+    byteps_lazy_init_for_gdr();
+  }else{
+    byteps_lazy_init();
+  }
   BytePSGlobal::GetOrInitPS();
+}
+
+void byteps_lazy_init_for_gdr(){
+  BytePSGlobal::Init();
+  std::vector<LoopFunction> func;
+
+  // Push & Pull in distributed mode
+  if (BytePSGlobal::IsDistributed()) {
+    if (BytePSGlobal::IsRootDevice()) {
+      for(int i=0;i<BytePSGlobal::GetPushThread();i++){
+        func.push_back(PushLoopGDR);
+      }
+      for(int i=0;i<BytePSGlobal::GetPushThread();i++){
+        func.push_back(PullLoopGDR);
+      }
+    }
+  }
+  BytePSGlobal::Start(func);
+  return;
 }
 
 void byteps_lazy_init() {
@@ -183,6 +207,128 @@ void PartitionTensor(
   }
 }
 
+void PartitionTensorGDR(
+    std::shared_ptr<TensorTableEntry> entry,
+    std::vector<std::shared_ptr<TensorTableEntry>> &partitions) {
+  
+  BPS_CHECK(entry->counter_ptr)
+      << entry->tensor_name << " counter pointer is null";
+
+  // 1. 确定总大小 (以字节为单位)
+  // 对于 GDR，必须精确知道字节大小以便计算指针偏移
+  size_t size = entry->tensor ? entry->tensor->size() : entry->output->size();
+  
+  // 获取配置的分片大小 (BytePSGlobal::GetPartitionBound() 通常返回字节数)
+  size_t bound = BytePSGlobal::GetPartitionBound();
+  
+  // GDR 优化：如果总大小小于分片界限，通常不需要分片，直接作为一个任务处理可能效率更高
+  // 但为了保持逻辑一致性，这里保留循环，或者可以在外部加判断。
+  // 注意：某些 RDMA 网卡对地址对齐有要求 (如 4KB 页对齐)，如果 bound 不是对齐的，可能需要调整。
+  // 这里假设 bound 已经处理过对齐问题。
+
+  size_t accumulated = 0;
+  int i = 0;
+
+  // 获取基地址指针 (Base Pointer)
+  // 逻辑：如果设备是 GPU，优先使用 gpu_ptr；如果是 CPU 但使用了 Pin Memory 准备做 GDR，使用 cpubuff。
+  // 注意：需要确保 entry->gpu_ptr 或 entry->tensor->data() 是有效的基地址。
+  void* base_ptr = nullptr;
+  bool is_gpu = (entry->device != CPU_DEVICE_ID);
+
+  if (is_gpu) {
+      // 优先使用显式存储的 gpu_ptr，如果为空则尝试从 tensor 获取
+      if (entry->gpu_ptr != nullptr) {
+          base_ptr = entry->gpu_ptr;
+      } else if (entry->tensor) {
+          base_ptr = const_cast<void*>(entry->tensor->data()); 
+      } else if (entry->output) {
+          base_ptr = const_cast<void*>(entry->output->data());
+      }
+  } else {
+      // CPU 情况，通常使用 cpubuff (如果是 pinned memory)
+      base_ptr = entry->cpubuff;
+      if (base_ptr == nullptr && entry->tensor) {
+           base_ptr = const_cast<void*>(entry->tensor->data());
+      }
+  }
+
+  while (accumulated < size) {
+    std::shared_ptr<TensorTableEntry> e(new TensorTableEntry);
+    
+    // --- 基础属性拷贝 ---
+    e->tensor_name = entry->tensor_name + std::string("_") + std::to_string(i);
+    e->context = entry->context;
+    e->ready_event = entry->ready_event;
+    e->device = entry->device;
+    e->priority = entry->priority;
+    e->version = entry->version;
+    e->callback = entry->callback;
+    e->queue_list = entry->queue_list;
+    e->counter_ptr = entry->counter_ptr;
+    e->total_partnum = entry->total_partnum;
+    
+    // 共享原始 Tensor 对象 (浅拷贝)，实际数据访问通过 offset + base_ptr 进行
+    e->tensor = entry->tensor;
+    e->output = entry->output;
+
+    // --- GDR 关键修改：计算分片后的指针和长度 ---
+    
+    // 计算当前分片的长度
+    size_t remaining = size - accumulated;
+    e->len = (remaining > bound) ? bound : remaining;
+    e->offset = accumulated;
+
+    // 计算当前分片的起始指针 (Base Ptr + Offset)
+    if (base_ptr != nullptr) {
+        uint8_t* byte_base = reinterpret_cast<uint8_t*>(base_ptr);
+        void* chunk_ptr = byte_base + accumulated;
+        
+        if (is_gpu) {
+            e->gpu_ptr = chunk_ptr; 
+            // 对于 GDR，cpubuff 通常设为 nullptr 或者保持不变作为备用，
+            // 关键在于确保下层通信库使用 gpu_ptr 进行注册和传输。
+            e->cpubuff = nullptr; 
+        } else {
+            // CPU Pinned Memory for GDR
+            e->cpubuff = chunk_ptr;
+            e->gpu_ptr = nullptr;
+        }
+    } else {
+        // 如果无法获取基地址，保持原样，依赖下层逻辑通过 offset 计算 (不推荐用于高性能 GDR)
+        e->gpu_ptr = entry->gpu_ptr;
+        e->cpubuff = entry->cpubuff;
+    }
+
+    // PCIe Merging buffers 也需要根据逻辑切分吗？
+    // 通常 pcie_cpubuff 是一个向量，如果是多卡聚合场景，可能需要更复杂的逻辑。
+    // 这里暂时深拷贝向量，具体地址偏移可能需要下层处理，或者如果它是用于中间缓冲，
+    // 在纯 GDR 路径下可能根本用不到这个字段。
+    // e->pcie_cpubuff = entry->pcie_cpubuff; 
+
+    // --- 压缩器处理 ---
+    // 注意：GDR 通常用于未压缩传输。如果开启了压缩，压缩器通常是针对整个 tensor 的，
+    // 或者每个分片需要独立的压缩上下文。
+    // 原逻辑：e->compressor = entry->context->compressor_list[i];
+    // 如果 compressor_list 是按分片预分配好的，则保留；否则需小心。
+    // if (!entry->context->compressor_list.empty()) {
+    //     if (i < static_cast<int>(entry->context->compressor_list.size())) {
+    //         e->compressor = entry->context->compressor_list[i];
+    //     } else {
+    //         // 防止越界，视具体压缩策略而定，可能需要复用或报错
+    //         e->compressor = nullptr; 
+    //     }
+    // }
+
+    // 初始化其他压缩相关字段
+    e->compressed = nullptr; // 分片初始状态未压缩
+
+    accumulated += e->len;
+    ++i;
+
+    partitions.push_back(e);
+  }
+}
+
 Status EnqueueTensor(BPSContext &context, std::shared_ptr<Tensor> input,
                      std::shared_ptr<Tensor> output,
                      std::shared_ptr<ReadyEvent> ready_event, const int device,
@@ -200,12 +346,12 @@ Status EnqueueTensor(BPSContext &context, std::shared_ptr<Tensor> input,
   }
 
   // add queue
-  if (BytePSGlobal::IsRootDevice() && !context.compressor_list.empty()) {
-    auto it = std::find(queue_list->begin(), queue_list->end(), PUSH);
-    it = queue_list->insert(it, COMPRESS);  // before PUSH
-    it = std::find(queue_list->begin(), queue_list->end(), PULL);
-    queue_list->insert(it + 1, DECOMPRESS);  // after PULL
-  }
+  // if (BytePSGlobal::IsRootDevice() && !context.compressor_list.empty()) {
+  //   auto it = std::find(queue_list->begin(), queue_list->end(), PUSH);
+  //   // it = queue_list->insert(it, COMPRESS);  // before PUSH
+  //   it = std::find(queue_list->begin(), queue_list->end(), PULL);
+  //   // queue_list->insert(it + 1, DECOMPRESS);  // after PULL
+  // }
 
   std::shared_ptr<TensorTableEntry> e(new TensorTableEntry);
   e->tensor_name = name;
@@ -283,6 +429,96 @@ Status EnqueueTensor(BPSContext &context, std::shared_ptr<Tensor> input,
                  << ", rank=" << BytePSGlobal::GetLocalRank();
   return Status::OK();
 }
+
+// Status EnqueueTensorGDR(std::vector<torch::Tensor> tensor,
+//                      std::shared_ptr<ReadyEvent> ready_event, const int device,
+//                      const int priority, const int version,
+//                      StatusCallback callback,
+//                      std::shared_ptr<std::vector<QueueType>> queue_list) {
+//   if (BytePSGlobal::ShouldShutdown()) {
+//     return Status::OK();
+//   }
+
+//   // auto &name = context.tensor_name;
+//   // if (input && output) {
+//   //   BPS_CHECK_EQ(input->size(), output->size())
+//   //       << name << " output tensor size does not match";
+//   // }
+
+//   // add queue
+//   // if (BytePSGlobal::IsRootDevice() && !context.compressor_list.empty()) {
+//     auto it = std::find(queue_list->begin(), queue_list->end(), PUSH);
+//     // it = queue_list->insert(it, COMPRESS);  // before PUSH
+//     it = std::find(queue_list->begin(), queue_list->end(), PULL);
+//     // queue_list->insert(it + 1, DECOMPRESS);  // after PULL
+//   // }
+
+//   // std::shared_ptr<TensorTableEntry> e(new TensorTableEntry);
+//   // e->tensor_name = name;
+//   // e->context = &context;
+//   // e->tensor = input;
+//   // e->output = output;
+//   // e->ready_event = ready_event;
+//   // e->device = device;
+//   // e->priority = priority;
+//   // e->version = version;
+//   // e->callback = callback;
+
+
+//   // e->cpubuff = context.cpubuff;
+//   // e->gpu_ptr = context.gpu_ptr;
+//   // e->pcie_cpubuff = context.pcie_cpubuff;
+//   // e->queue_list = *queue_list;
+//   // e->counter_ptr = std::make_shared<std::atomic_int>(0);
+//   // e->total_partnum = context.key_list.size();
+
+//   std::vector<std::shared_ptr<TensorTableEntry>> partitions;
+//   PartitionTensor(e, partitions);
+//   BPS_CHECK_EQ(context.key_list.size(), partitions.size())
+//       << name << ": " << context.key_list.size() << ", " << partitions.size();
+
+//   if (e->queue_list.size() == 0) {
+//     BPS_CHECK(e->tensor_name != "");
+//     BPS_LOG(TRACE) << e->tensor_name << ", device=" << e->device
+//                    << " has no queue_list assigned, skipped";
+//     e->callback(Status::OK());
+//     return Status::OK();
+//   }
+
+//   // add for profiling
+//   if (context.profile_flag) {
+//     auto now = std::chrono::system_clock::now();
+//     auto duration = now.time_since_epoch();
+//     auto us = std::chrono::duration_cast<std::chrono::microseconds>(duration);
+
+//     BPSCommTime *ret = new BPSCommTime;
+//     ret->start_t = (long long)(us.count());
+//     context.comm_time.push(ret);
+//   }
+
+//   size_t accumulated = 0;
+//   for (size_t i = 0; i < partitions.size(); ++i) {
+//     auto task = partitions[i];
+//     task->key = context.key_list[i];  // assign the key now
+//     BPS_CHECK(task->tensor_name != "");
+//     BPS_LOG(TRACE) << "EnqueueTensor: " << (task->tensor_name)
+//                    << ", key=" << (task->key) << ", offset=" << (task->offset)
+//                    << ", len=" << (task->len) << ", device=" << (task->device)
+//                    << " rank=" << BytePSGlobal::GetLocalRank();
+
+//     BytePSGlobal::GetScheduledQueue(e->queue_list[0])->addTask(task);
+//     accumulated += task->len;
+//   }
+
+//   auto tensor = (e->tensor ? e->tensor : e->output);
+//   BPS_CHECK(tensor);
+//   BPS_CHECK_EQ(accumulated, tensor->size())
+//       << "accumulated partition size not equal to original tensor size";
+
+//   BPS_LOG(TRACE) << "EnqueueTensor finished: " << name
+//                  << ", rank=" << BytePSGlobal::GetLocalRank();
+//   return Status::OK();
+// }
 
 void InitTensor(BPSContext &context, size_t size, int dtype, void *cpubuff) {
   std::lock_guard<std::mutex> lock(context.init_mutex);
@@ -434,6 +670,11 @@ std::shared_ptr<std::vector<QueueType>> GetPushQueueList(int device) {
   auto queue_list = std::make_shared<std::vector<QueueType>>();
 
   // Per-PCIe-switch NCCL reduce
+  if(BytePSGlobal::IsUseGDR()){
+    queue_list->push_back(PUSH);
+    return queue_list;
+  }
+
   if (BytePSGlobal::GetNccl()->IsSignalRoot()) {
     queue_list->push_back(REDUCE);
   } else {
@@ -466,6 +707,10 @@ std::shared_ptr<std::vector<QueueType>> GetPushQueueList(int device) {
 std::shared_ptr<std::vector<QueueType>> GetPullQueueList(int device) {
   auto queue_list = std::make_shared<std::vector<QueueType>>();
 
+  if(BytePSGlobal::IsUseGDR()){
+    queue_list->push_back(PULL);
+    return queue_list;
+  }
   // Pull in distributed mode
   if (BytePSGlobal::IsDistributed()) {
     if (BytePSGlobal::IsRootDevice()) {
