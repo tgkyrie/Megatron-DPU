@@ -34,22 +34,30 @@ def _reduce(input_, group):
 
     return input_
 
-def _bps_reduce(input_,group):
+
+def _bps_reduce(input_, group, name):
     assert group is not None, "group should not be None"
+    assert name is not None, "BytePS TP reduce requires a stable op name."
 
     # Bypass the function if we are using only 1 GPU.
     if group.size() == 1:
         return input_
 
-    # All-reduce.
-    # torch.distributed.all_reduce(input_.contiguous(), group=group)
+    # Current BytePS TP prototype has no subgroup support yet, so it is only valid
+    # when the BytePS world exactly matches the TP group.
+    torch_world_size = torch.distributed.get_world_size()
+    assert group.size() == torch_world_size, (
+        "Current BytePS TP reduce prototype requires BytePS world == TP group "
+        f"(tp={group.size()}, world={torch_world_size})."
+    )
+
     output_ = bps.push_pull(
-                    input_,
-                    average=False,
-                    name="TP",
-                    version=0,
-                    priority=0
-                )
+        input_,
+        average=False,
+        name=name,
+        version=0,
+        priority=0,
+    )
 
     return output_
 
@@ -257,19 +265,19 @@ class _BpsReduceFromModelParallelRegion(torch.autograd.Function):
     """Use DPU All-reduce the input from the model parallel region."""
 
     @staticmethod
-    def symbolic(graph, input_, group):
+    def symbolic(graph, input_, group, name):
         """Symbolic function for tracing."""
-        return _reduce(input_, group)
+        return _bps_reduce(input_, group, name)
 
     @staticmethod
-    def forward(ctx, input_, group):
+    def forward(ctx, input_, group, name):
         """Forward function."""
-        return _reduce(input_, group)
+        return _bps_reduce(input_, group, name)
 
     @staticmethod
     def backward(ctx, grad_output):
         """Backward function."""
-        return grad_output, None
+        return grad_output, None, None
 
 class _ScatterToModelParallelRegion(torch.autograd.Function):
     """Split the input and keep only the corresponding chuck to the rank."""
@@ -514,9 +522,11 @@ def reduce_from_tensor_model_parallel_region(input_, group=None):
     """Wrapper for autograd function: forward: all reduce, backward copy"""
     group = get_tensor_model_parallel_group_if_none(group)
     return _ReduceFromModelParallelRegion.apply(input_, group)
-def bps_reduce_from_tensor_model_parallel_region(input_,group=None):
+
+
+def bps_reduce_from_tensor_model_parallel_region(input_, group=None, name=None):
     group = get_tensor_model_parallel_group_if_none(group)
-    return _ReduceFromModelParallelRegion.apply(input_, group)
+    return _BpsReduceFromModelParallelRegion.apply(input_, group, name)
 
 def scatter_to_tensor_model_parallel_region(input_, group=None):
     """Wrapper for autograd function: forward: RS, backward: AG <last dim>"""

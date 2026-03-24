@@ -16,9 +16,11 @@ class ModelParallelConfig:
     ###################
     # Model parallelism
     ###################
-    use_dpu_reduce: bool =False
+    use_dpu_reduce: bool = False
     """Use DPU for In-Network AllReduce"""
-   
+
+    use_dpu_tp_reduce: bool = False
+    """Use BytePS to replace TP all-reduce in the current TP-only prototype."""
 
     tensor_model_parallel_size: int = 1
     """Intra-layer model parallelism. Splits tensors across GPU ranks."""

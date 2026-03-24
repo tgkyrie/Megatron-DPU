@@ -6,6 +6,7 @@
 import os
 import warnings
 from functools import partial
+from itertools import count
 from typing import Any, Callable, List, Optional, Tuple
 
 import torch
@@ -61,6 +62,16 @@ _MODEL_PARALLEL_ATTRIBUTE_DEFAULTS = {
     "partition_dim": -1,
     "partition_stride": 1,
 }
+
+_DPU_TP_COMM_NAME_COUNTER = count()
+
+
+def _build_dpu_tp_comm_name(module_kind: str, tp_comm_buffer_name: Optional[str] = None) -> str:
+    parts = ["tp", module_kind]
+    if tp_comm_buffer_name:
+        parts.append(tp_comm_buffer_name)
+    parts.append(str(next(_DPU_TP_COMM_NAME_COUNTER)))
+    return "_".join(parts)
 
 try:
     if is_torch_min_version("2.4.0a0"):
@@ -1131,6 +1142,9 @@ class RowParallelLinear(torch.nn.Module):
         self.gradient_accumulation_fusion = config.gradient_accumulation_fusion
         self.sequence_parallel = config.sequence_parallel
         self.tp_group = tp_group
+        self.dpu_tp_comm_name = _build_dpu_tp_comm_name(
+            "row_parallel_linear", tp_comm_buffer_name
+        )
 
         if self.sequence_parallel and not self.input_is_parallel:
             raise RuntimeError("To enable `sequence_parallel`, `input_is_parallel` must be `True`")
@@ -1272,9 +1286,13 @@ class RowParallelLinear(torch.nn.Module):
                 output_parallel, group=self.tp_group
             )
         else:
-            if self.config.use_dpu_reduce:
-                output_ = bps_reduce_from_tensor_model_parallel_region(output_parallel,group=self.tp_group)
-            else:    
+            if self.config.use_dpu_tp_reduce:
+                output_ = bps_reduce_from_tensor_model_parallel_region(
+                    output_parallel,
+                    group=self.tp_group,
+                    name=self.dpu_tp_comm_name,
+                )
+            else:
                 output_ = reduce_from_tensor_model_parallel_region(output_parallel, group=self.tp_group)
         if not self.skip_bias_add:
             output = (output_ + self.bias) if self.bias is not None else output_

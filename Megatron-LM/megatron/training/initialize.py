@@ -105,7 +105,7 @@ def initialize_megatron(
             tensor_parallel.get_cuda_rng_tracker().set_states(state_dict['rng_tracker_states'])
 
     args = get_args()
-    if args.use_dpu_reduce:
+    if args.use_dpu_reduce or args.use_dpu_tp_reduce:
         bps.init()
 
     initialize_rerun_state_machine(
