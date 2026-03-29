@@ -97,7 +97,7 @@ PRETRAIN_SCRIPT_PATH="pretrain_gpt.py"
 MICRO_BATCH_SIZE=${MICRO_BATCH_SIZE:-4}
 GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-4}
 
-NUM_LAYERS=${NUM_LAYERS:-8}
+NUM_LAYERS=${NUM_LAYERS:-16}
 HIDDEN_SIZE=${HIDDEN_SIZE:-2048}
 NUM_HEADS=${NUM_HEADS:-16}
 FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE:-5504}
@@ -106,7 +106,7 @@ KV_CHANNELS=${KV_CHANNELS:-128}
 SEQ_LENGTH=${SEQ_LENGTH:-3072}
 MAX_POSITION_EMBEDDINGS=${MAX_POSITION_EMBEDDINGS:-4096}
 
-DTYPE=${DTYPE:-fp8}
+DTYPE=${DTYPE:-fp32}
 
 TOKENIZER_ARG=${3:-"MOCK"}
 DATA_ARG=${4:-"MOCK"}
@@ -157,13 +157,13 @@ MODEL_ARGS=(
     --init-method-std 0.02
 
     --log-interval 1
-    --train-iters 5
+    --train-iters 10
     --no-rope-fusion
 
     --tensor-model-parallel-size "$TP_SIZE"
     --context-parallel-size "$CP_SIZE"
 
-    --use-dpu-tp-reduce
+    #--use-dpu-tp-reduce
 )
 
 ############################################
@@ -212,7 +212,7 @@ if [[ "$TOKENIZER_ARG" == "MOCK" ]] || [[ "$DATA_ARG" == "MOCK" ]]; then
     DATA_ARGS_LIST+=(
         --mock-data
         --tokenizer-type NullTokenizer
-        --vocab-size 151936
+        --vocab-size 4096
         --split '99,1,0'
         --no-mmap-bin-files
         --num-workers 1
@@ -222,7 +222,7 @@ else
         --data-path "$DATA_ARG"
         --tokenizer-type HuggingFaceTokenizer
         --tokenizer-model "$TOKENIZER_ARG"
-        --vocab-size 151936
+        --vocab-size 4096
         --data-cache-path "$DATA_CACHE_PATH"
         --split '99,1,0'
         --no-mmap-bin-files
