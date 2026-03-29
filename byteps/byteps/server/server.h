@@ -125,6 +125,7 @@ std::vector<uint64_t> acc_load_; // accumulated tensor size for an engine thread
 uint64_t timestamp_ = 0;
 size_t engine_thread_num_ = 4;
 volatile bool is_engine_blocking_ = false;
+volatile bool record_event_ = false;
 volatile bool log_key_info_ = false;
 volatile bool sync_mode_ = true;
 volatile bool debug_mode_ = false;

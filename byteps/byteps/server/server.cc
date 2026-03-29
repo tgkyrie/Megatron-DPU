@@ -23,6 +23,38 @@ namespace server {
 
 using namespace ps;
 
+struct LatencyLogger {
+  struct Event {
+    std::string name;
+    int64_t ns;
+  };
+
+  std::chrono::high_resolution_clock::time_point start;
+  std::vector<Event> events;
+  std::mutex mutex_;
+
+  LatencyLogger() : start(std::chrono::high_resolution_clock::now()) {}
+
+  void record_event(const std::string& name) {
+    if(!record_event_)return;
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto now = std::chrono::high_resolution_clock::now();
+    int64_t t = std::chrono::duration_cast<std::chrono::nanoseconds>(now - start).count();
+    events.push_back({name, t});
+  }
+
+  ~LatencyLogger() {
+    if (events.empty()) return;
+    std::ostringstream oss;
+    oss << "Latency events:\n";
+    for (const auto& e : events) {
+      oss << "  [" << e.name << "] " << e.ns/1000 << " us\n";
+    }
+    LOG(INFO) << oss.str();
+  }
+};
+
+LatencyLogger logger_;
 // engine related
 std::vector<PriorityQueue*> engine_queues_;
 std::vector<std::thread*> engine_threads_;
@@ -39,6 +71,7 @@ UpdateBuf* GetUpdateBuf(uint64_t key) {
 
 void SendPushResponse(uint64_t key, const ps::KVMeta& req,
                       ps::KVServer<char>* server) {
+  logger_.record_event("push resp begin.key."+std::to_string(key));
   auto iterator = push_response_map_.find(key);
   if (iterator == push_response_map_.end()) {  // new key
     ps::KVPairs<char> response;
@@ -49,10 +82,12 @@ void SendPushResponse(uint64_t key, const ps::KVMeta& req,
     ps::KVPairs<char>* response = &iterator->second;
     server->Response(req, *response);
   }
+  logger_.record_event("push resp end.key."+std::to_string(key));
 }
 
 void SendPullResponse(const DataHandleType type, const uint64_t key,
                       const ps::KVMeta& req_meta, ps::KVServer<char>* server) {
+  logger_.record_event("pull resp begin.key."+std::to_string(key));
   std::lock_guard<std::mutex> lock(pullresp_mu_);
   char* data;
   size_t len;
@@ -87,6 +122,7 @@ void SendPullResponse(const DataHandleType type, const uint64_t key,
     response->vals = ps::SArray<char>(p, len, false);
     server->Response(req_meta, *response);
   }
+  logger_.record_event("pull resp end.key."+std::to_string(key));
 }
 
 void BytePSServerEngineThread(int i) {
@@ -98,7 +134,7 @@ void BytePSServerEngineThread(int i) {
     // do some check
     CHECK(msg.dst);
     CHECK(msg.src);
-
+    logger_.record_event("engine thread preprocess begin.");
     auto iter = compressor_map_.find(msg.key);
     if (iter != compressor_map_.end()) {
       // compress
@@ -126,6 +162,7 @@ void BytePSServerEngineThread(int i) {
         updates->merged.len = msg.len;
       }
     }
+    logger_.record_event("engine thread preprocess end.");
 
     bool is_debug = (debug_mode_ && (debug_key_ == msg.key));
     switch (msg.ops) {
@@ -140,7 +177,9 @@ void BytePSServerEngineThread(int i) {
                     << "src_addr: " << DEBUG_PRINT_TENSOR_ADDRESS(msg.src)
                     << "\t";
         }
+        logger_.record_event("copy data begin");
         bps_reducer_->copy(msg.dst, msg.src, msg.len);
+        logger_.record_event("copy data end");
         if (is_debug) {
           std::lock_guard<std::mutex> lock(debug_mu_);
           LOG(INFO) << "stage: ENGINE_COPY_MERGED_TO_STORE_AFTER \t"
@@ -194,7 +233,9 @@ void BytePSServerEngineThread(int i) {
                     << "src_addr: " << DEBUG_PRINT_TENSOR_ADDRESS(msg.src)
                     << "\t";
         }
+        logger_.record_event("reduce begin");
         CHECK_GE(bps_reducer_->sum(msg.dst, msg.src, msg.len, bps_type), 0);
+        logger_.record_event("reduce end");
         if (is_debug) {
           std::lock_guard<std::mutex> lock(debug_mu_);
           LOG(INFO) << "stage: ENGINE_SUM_RECV_AFTER \t"
@@ -221,6 +262,7 @@ inline uint64_t now_ns() {
 void BytePSHandler(const ps::KVMeta& req_meta,
                    const ps::KVPairs<char>& req_data,
                    ps::KVServer<char>* server) {
+  logger_.record_event("handler begin");
   std::lock_guard<std::mutex> lock(handle_mu_);  // push & pull may have racing
   DataHandleType type = DepairDataHandleType(req_meta.cmd);
   // CHECK_EQ(type.requestType, RequestType::kDefaultPushPull);
@@ -309,7 +351,7 @@ void BytePSHandler(const ps::KVMeta& req_meta,
         SendPushResponse(key, req, server);
       }
       updates->request.clear();
-    } else {
+    } else { // not first iteration
       auto updates = GetUpdateBuf(key);
       auto tid = GetThreadID(key, len);
       if (updates->request.empty()) {  // from the first incoming worker
@@ -325,6 +367,7 @@ void BytePSHandler(const ps::KVMeta& req_meta,
           }
           updates->merged.tmp_sarray = req_data;
           // copy
+          // first worker packet, copy
           BytePSEngineMessage msg = {timestamp_++,   type,     key,
                                      stored->tensor, recved,   stored->len,
                                      COPY_FIRST,     req_data, req_meta};
@@ -446,7 +489,10 @@ void init_global_env() {
   is_engine_blocking_ = GetEnv("BYTEPS_SERVER_ENGINE_BLOCKING", 0);
   if (is_engine_blocking_)
     LOG(INFO) << "Enable blocking mode of the server engine";
-
+  record_event_= GetEnv("DMLC_RECORD_EVENT",0);
+  if (record_event_){
+    LOG(INFO) << "Enable record trace event";
+  }
   // sync or async training
   sync_mode_ = !GetEnv("BYTEPS_ENABLE_ASYNC", 0);
   if (!sync_mode_)

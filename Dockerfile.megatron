@@ -1,5 +1,5 @@
 # Megatron 镜像，基于已构建的 BytePS 镜像
-ARG BYTEPS_IMAGE=tgkyrie/byteps:03.16
+ARG BYTEPS_IMAGE=tgkyrie/byteps:03.24
 FROM ${BYTEPS_IMAGE}
 
 ARG BYTEPS_BASE_PATH=/usr/local
