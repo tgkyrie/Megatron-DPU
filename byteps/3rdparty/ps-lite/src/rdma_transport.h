@@ -18,6 +18,8 @@
 
 #ifdef DMLC_USE_RDMA
 
+#include <algorithm>
+
 #include "rdma_utils.h"
 
 namespace ps {
@@ -48,7 +50,14 @@ struct Endpoint {
 
   bool inited = false;
 
-  Endpoint() : status(IDLE), node_id(Node::kEmpty), cm_id(nullptr), rx_ctx() {
+  Endpoint(bool data_plane = false)
+      : status(IDLE),
+        node_id(Node::kEmpty),
+        cm_id(nullptr),
+        isDataPlane(data_plane),
+        rx_ctx(nullptr),
+        start_ctx(nullptr),
+        reply_ctx(nullptr) {
     auto byteps_rx_depth = Environment::Get()->find("BYTEPS_RDMA_RX_DEPTH");
     auto byteps_start_depth =
         Environment::Get()->find("BYTEPS_RDMA_START_DEPTH");
@@ -62,22 +71,25 @@ struct Endpoint {
     }
     kStartDepth = byteps_start_depth ? atoi(byteps_start_depth) : kStartDepth;
     kRxDepth = byteps_rx_depth ? atoi(byteps_rx_depth) : kRxDepth;
+    if (!isDataPlane) {
+      kRxDepth = std::min(kRxDepth, 64);
+    }
     kReplyDepth = kRxDepth;
-
-    isDataPlane=false;
 
     start_ctx = new WRContext[kStartDepth];
     reply_ctx = new WRContext[kReplyDepth];
-    rx_ctx = new WRContext[kRxDepth];
   }
 
   ~Endpoint() {
-    for (int i = 0; i < kRxDepth; ++i) {
-      if (!(rx_ctx[i].buffer)) {
-        continue;
+    if (rx_ctx) {
+      for (int i = 0; i < kRxDepth; ++i) {
+        if (!(rx_ctx[i].buffer)) {
+          continue;
+        }
+        free(rx_ctx[i].buffer->addr);
+        CHECK_EQ(ibv_dereg_mr(rx_ctx[i].buffer), 0);
       }
-      free(rx_ctx[i].buffer->addr);
-      CHECK_EQ(ibv_dereg_mr(rx_ctx[i].buffer), 0);
+      delete[] rx_ctx;
     }
 
     for (int i = 0; i < kStartDepth; ++i) {
@@ -93,6 +105,9 @@ struct Endpoint {
         CHECK_EQ(ibv_dereg_mr(reply_ctx[i].buffer), 0);
       }
     }
+
+    delete[] start_ctx;
+    delete[] reply_ctx;
 
     rdma_destroy_qp(cm_id);
     CHECK_EQ(rdma_destroy_id(cm_id), 0) << strerror(errno);
@@ -132,18 +147,20 @@ struct Endpoint {
     }
   }
 
-  void Init(struct ibv_cq *cq, struct ibv_pd *pd) {
+  void Init(struct ibv_cq *cq, struct ibv_pd *pd,
+            struct ibv_srq *srq = nullptr) {
     struct ibv_qp_init_attr attr;
     memset(&attr, 0, sizeof(ibv_qp_init_attr));
     attr.send_cq = cq;
     attr.recv_cq = cq;
     attr.cap.max_send_wr = kStartDepth + kReplyDepth;
-    attr.cap.max_recv_wr = kRxDepth;
+    attr.cap.max_recv_wr = srq ? 1 : kRxDepth;
     attr.cap.max_send_sge = kSGEntry;
     attr.cap.max_recv_sge = kSGEntry;
     attr.cap.max_inline_data=256;
     attr.qp_type = IBV_QPT_RC;
     attr.sq_sig_all = 0;
+    attr.srq = srq;
 
     CHECK_EQ(rdma_create_qp(cm_id, pd, &attr), 0)
         << "Create RDMA queue pair failed: " << strerror(errno);
@@ -155,24 +172,29 @@ struct Endpoint {
                             kRendezvousReplyContext);
     }
 
-    for (int i = 0; i < kRxDepth; ++i) {
+    if (!srq) {
       if (inited == false) {
-        void *buf;
-        aligned_malloc((void **)&buf, kMempoolChunkSize);
-        CHECK(buf);
-        struct ibv_mr *mr =
-            ibv_reg_mr(pd, buf, kMempoolChunkSize, IBV_ACCESS_LOCAL_WRITE);
-        CHECK(mr)
-            << "ibv_reg_mr failed: " << strerror(errno)
-            << "\nYou can try to reduce BYTEPS_RDMA_START_DEPTH (default 128)"
-            << " or BYTEPS_RDMA_RX_DEPTH (default 2048)";
-
-        rx_ctx[i].type = kReceiveContext;
-        rx_ctx[i].buffer = mr;
-        rx_ctx[i].private_data = this;
+        rx_ctx = new WRContext[kRxDepth];
       }
+      for (int i = 0; i < kRxDepth; ++i) {
+        if (inited == false) {
+          void *buf;
+          aligned_malloc((void **)&buf, kMempoolChunkSize);
+          CHECK(buf);
+          struct ibv_mr *mr =
+              ibv_reg_mr(pd, buf, kMempoolChunkSize, IBV_ACCESS_LOCAL_WRITE);
+          CHECK(mr)
+              << "ibv_reg_mr failed: " << strerror(errno)
+              << "\nYou can try to reduce BYTEPS_RDMA_START_DEPTH (default 128)"
+              << " or BYTEPS_RDMA_RX_DEPTH (default 2048)";
 
-      PostRecv(&rx_ctx[i]);
+          rx_ctx[i].type = kReceiveContext;
+          rx_ctx[i].buffer = mr;
+          rx_ctx[i].private_data = this;
+        }
+
+        PostRecv(&rx_ctx[i]);
+      }
     }
     inited = true;
   }

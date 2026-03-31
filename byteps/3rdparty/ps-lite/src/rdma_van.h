@@ -122,6 +122,27 @@ class RDMAVan : public Van {
       endpoints_.clear();
       data_endpoints_.clear();
     }
+    {
+      std::lock_guard<std::mutex> lk(qp_map_mu_);
+      qp_num_to_endpoint_.clear();
+    }
+
+    if (shared_rx_ctx_) {
+      for (int i = 0; i < srq_depth_; ++i) {
+        if (!(shared_rx_ctx_[i].buffer)) {
+          continue;
+        }
+        free(shared_rx_ctx_[i].buffer->addr);
+        CHECK_EQ(ibv_dereg_mr(shared_rx_ctx_[i].buffer), 0);
+      }
+      delete[] shared_rx_ctx_;
+      shared_rx_ctx_ = nullptr;
+    }
+
+    if (srq_) {
+      CHECK(!ibv_destroy_srq(srq_)) << "Failed to destroy SRQ";
+      srq_ = nullptr;
+    }
 
     PS_VLOG(1) << "Destroying cq and pd.";
     CHECK(!ibv_destroy_cq(cq_)) << "Failed to destroy CQ";
@@ -201,14 +222,10 @@ class RDMAVan : public Van {
       }
 
       Endpoint *endpoint;
-      whichEndpoints[node.id] = std::make_unique<Endpoint>();
+      whichEndpoints[node.id] = std::make_unique<Endpoint>(dataPlane);
       endpoint = whichEndpoints[node.id].get();
 
       endpoints_mu_.unlock();
-      
-      if(dataPlane){
-        endpoint->isDataPlane=true;
-      }
       endpoint->SetNodeID(node.id);
 
       struct addrinfo *remote_addr;
@@ -731,8 +748,67 @@ class RDMAVan : public Van {
     cq_ = ibv_create_cq(context_, kMaxConcurrentWorkRequest * 2, NULL,
                         comp_event_channel_, 0);
 
+    auto use_srq_env = Environment::Get()->find("BYTEPS_RDMA_USE_SRQ");
+    use_srq_ = use_srq_env ? atoi(use_srq_env) : true;
+    if (use_srq_) {
+      auto srq_depth_env = Environment::Get()->find("BYTEPS_RDMA_SRQ_DEPTH");
+      srq_depth_ = srq_depth_env ? atoi(srq_depth_env) : 2048;
+
+      struct ibv_srq_init_attr srq_attr;
+      memset(&srq_attr, 0, sizeof(srq_attr));
+      srq_attr.attr.max_wr = srq_depth_;
+      srq_attr.attr.max_sge = kSGEntry;
+      srq_ = ibv_create_srq(pd_, &srq_attr);
+      CHECK(srq_) << "Failed to create SRQ";
+
+      shared_rx_ctx_ = new WRContext[srq_depth_];
+      for (int i = 0; i < srq_depth_; ++i) {
+        void *buf;
+        aligned_malloc((void **)&buf, kMempoolChunkSize);
+        CHECK(buf);
+        struct ibv_mr *mr =
+            ibv_reg_mr(pd_, buf, kMempoolChunkSize, IBV_ACCESS_LOCAL_WRITE);
+        CHECK(mr) << "ibv_reg_mr failed for SRQ: " << strerror(errno);
+
+        shared_rx_ctx_[i].type = kReceiveContext;
+        shared_rx_ctx_[i].buffer = mr;
+        shared_rx_ctx_[i].private_data = nullptr;
+        PostSharedRecv(&shared_rx_ctx_[i]);
+      }
+    }
+
     CHECK(cq_) << "Failed to create completion queue";
     CHECK(!ibv_req_notify_cq(cq_, 0)) << "Failed to request CQ notification";
+  }
+
+  void PostSharedRecv(WRContext *ctx) {
+    struct ibv_recv_wr wr, *bad_wr = nullptr;
+    memset(&wr, 0, sizeof(wr));
+
+    struct ibv_sge sge;
+    sge.addr = reinterpret_cast<uint64_t>(ctx->buffer->addr);
+    sge.length = kMempoolChunkSize;
+    sge.lkey = ctx->buffer->lkey;
+
+    wr.wr_id = reinterpret_cast<uint64_t>(ctx);
+    wr.next = nullptr;
+    wr.sg_list = &sge;
+    wr.num_sge = 1;
+
+    CHECK_EQ(ibv_post_srq_recv(srq_, &wr, &bad_wr), 0)
+        << "ibv_post_srq_recv failed.";
+  }
+
+  void RegisterEndpointQP(Endpoint *endpoint) {
+    std::lock_guard<std::mutex> lk(qp_map_mu_);
+    qp_num_to_endpoint_[endpoint->cm_id->qp->qp_num] = endpoint;
+  }
+
+  Endpoint *LookupEndpointByQPN(uint32_t qp_num) {
+    std::lock_guard<std::mutex> lk(qp_map_mu_);
+    auto it = qp_num_to_endpoint_.find(qp_num);
+    CHECK(it != qp_num_to_endpoint_.end()) << "QP not registered: " << qp_num;
+    return it->second;
   }
 
   void ReleaseWorkRequestContext(WRContext *context, Endpoint *endpoint) {
@@ -744,7 +820,11 @@ class RDMAVan : public Van {
         endpoint->free_reply_ctx.Push(context);
         break;
       case kReceiveContext:
-        endpoint->PostRecv(context);
+        if (use_srq_) {
+          PostSharedRecv(context);
+        } else {
+          endpoint->PostRecv(context);
+        }
         break;
       default:
         CHECK(0);
@@ -764,27 +844,31 @@ class RDMAVan : public Van {
             << static_cast<uint64_t>(wc[i].wr_id) << " " << wc[i].vendor_err
             << " postoffice ptr: " << (void *)postoffice_;
 
-        WRContext *context = reinterpret_cast<WRContext *>(wc[i].wr_id);
-        Endpoint *endpoint =
-            reinterpret_cast<Endpoint *>(context->private_data);
-
-        // IBV_WC_RDMA_WRITE use msg_buf as the wr_id
-        // so there won't be context and endpoint for this op
-
         switch (wc[i].opcode) {
           case IBV_WC_SEND: {
+            WRContext *context = reinterpret_cast<WRContext *>(wc[i].wr_id);
+            Endpoint *endpoint =
+                reinterpret_cast<Endpoint *>(context->private_data);
             ReleaseWorkRequestContext(context, endpoint);
           } break;
           case IBV_WC_RDMA_WRITE: {
             // do nothing
           } break;
           case IBV_WC_RECV_RDMA_WITH_IMM: {
+            WRContext *context = reinterpret_cast<WRContext *>(wc[i].wr_id);
+            Endpoint *endpoint =
+                use_srq_ ? LookupEndpointByQPN(wc[i].qp_num)
+                         : reinterpret_cast<Endpoint *>(context->private_data);
             uint32_t addr_idx = wc[i].imm_data;
             BufferContext *buf_ctx = addr_pool_.GetAddress(addr_idx);
             recv_buffers_.Push(std::make_tuple(endpoint, buf_ctx));
             ReleaseWorkRequestContext(context, endpoint);
           } break;
           case IBV_WC_RECV: {
+            WRContext *context = reinterpret_cast<WRContext *>(wc[i].wr_id);
+            Endpoint *endpoint =
+                use_srq_ ? LookupEndpointByQPN(wc[i].qp_num)
+                         : reinterpret_cast<Endpoint *>(context->private_data);
             CHECK(wc[i].wc_flags & IBV_WC_WITH_IMM);
             uint32_t imm = wc[i].imm_data;
             struct ibv_mr *mr = context->buffer;
@@ -943,18 +1027,19 @@ class RDMAVan : public Van {
     const RequestContext *remote_ctx = reinterpret_cast<const RequestContext *>(
         event->param.conn.private_data);
 
-    const auto r = incoming_.emplace(std::make_unique<Endpoint>());
+    const auto r = incoming_.emplace(
+        std::make_unique<Endpoint>(remote_ctx->isDataPlane));
     Endpoint *endpoint = r.first->get();
     endpoint->SetNodeID(remote_ctx->node);
     endpoint->cm_id = id;
-    endpoint->isDataPlane=remote_ctx->isDataPlane;
     id->context = endpoint;
 
     if (context_ == nullptr) {
       InitContext(id->verbs);
     }
 
-    endpoint->Init(cq_, pd_);
+    endpoint->Init(cq_, pd_, srq_);
+    RegisterEndpointQP(endpoint);
 
     bool is_local_node =
         disable_ipc_
@@ -1012,7 +1097,8 @@ class RDMAVan : public Van {
       InitContext(id->verbs);
     }
 
-    endpoint->Init(cq_, pd_);
+    endpoint->Init(cq_, pd_, srq_);
+    RegisterEndpointQP(endpoint);
 
     RequestContext ctx;
     ctx.node = static_cast<uint32_t>(my_node_.id);
@@ -1086,6 +1172,10 @@ class RDMAVan : public Van {
 
   // ibverbs protection domain
   struct ibv_pd *pd_ = nullptr;
+  struct ibv_srq *srq_ = nullptr;
+  WRContext *shared_rx_ctx_ = nullptr;
+  bool use_srq_ = true;
+  int srq_depth_ = 2048;
   // Completion event channel, to wait for work completions
   struct ibv_comp_channel *comp_event_channel_ = nullptr;
   // Completion queue, to poll on work completions
@@ -1101,6 +1191,8 @@ class RDMAVan : public Van {
   bool disable_ipc_ = false;
   std::mutex local_mu_;
   std::unordered_map<int, bool> is_local_;
+  std::mutex qp_map_mu_;
+  std::unordered_map<uint32_t, Endpoint *> qp_num_to_endpoint_;
 
   std::mutex addr_mu_;
   // <key, recver>, (<remote_addr, rkey, idx, local_addr>)
