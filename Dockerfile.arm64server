@@ -1,0 +1,221 @@
+########################
+# Dockerfile.arm64server
+# - arm64 BytePS server-only image
+# - single-stage, keep fuller environment
+# - fix ps-lite zmq/test build issue for server-only
+########################
+
+FROM ubuntu:22.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ARG BYTEPS_BASE_PATH=/usr/local
+ARG BYTEPS_PATH=${BYTEPS_BASE_PATH}/byteps
+ARG ENABLE_RDMA=1
+ENV BYTEPS_BASE_PATH=${BYTEPS_BASE_PATH}
+ENV BYTEPS_PATH=${BYTEPS_PATH}
+ENV BYTEPS_SERVER_ONLY=1
+ENV MAKEFLAGS="-j$(nproc)"
+
+WORKDIR ${BYTEPS_BASE_PATH}
+
+RUN set -eux; \
+    apt-get update; \
+    apt-get install -y --no-install-recommends \
+      tzdata ca-certificates git curl vim wget nano iproute2 less \
+      bash procps iputils-ping net-tools ethtool lsof strace \
+      cmake build-essential autoconf automake libtool pkg-config binutils \
+      numactl libnuma-dev libnuma1 \
+      libssl-dev libffi-dev \
+      libstdc++6 libgcc-s1 libgomp1 libffi8 \
+      libzmq5 libzmq3-dev \
+      python3 python3-dev python3-pip python3-setuptools python3-wheel python-is-python3 \
+    ; \
+    if [ "$ENABLE_RDMA" = "1" ]; then \
+      apt-get install -y --no-install-recommends \
+        rdma-core ibverbs-providers \
+        libibverbs-dev libibverbs1 ibverbs-utils \
+        librdmacm-dev librdmacm1 rdmacm-utils \
+      ; \
+    fi; \
+    rm -rf /var/lib/apt/lists/*; \
+    python3 -m pip install --no-cache-dir -U pip setuptools wheel; \
+    python3 -m pip install --no-cache-dir -U numpy cloudpickle==3.1.1
+
+COPY ./byteps/sh/server.sh \
+     ./byteps/sh/scheduler.sh \
+     ./byteps/sh/worker.sh \
+     ./byteps/sh/worker_ddp.sh \
+     ./byteps/sh/worker_single.sh \
+     ./byteps/sh/pushpull.sh \
+     ./byteps/sh/allreduce.sh \
+     /usr/local/
+
+RUN set -eux; \
+    chmod +x /usr/local/server.sh /usr/local/scheduler.sh /usr/local/worker.sh /usr/local/worker_ddp.sh /usr/local/worker_single.sh /usr/local/pushpull.sh /usr/local/allreduce.sh
+
+COPY ./byteps/ ${BYTEPS_PATH}/
+
+# arm64: 去掉 x86 专属编译选项
+RUN set -eux; \
+    arch="$(dpkg --print-architecture)"; \
+    if [ "$arch" = "arm64" ]; then \
+      echo "[arm64] patch setup.py flags + ps-lite flags"; \
+      sed -i -E \
+        -e "s/'-mno-avx512f',?[[:space:]]*//g" \
+        -e "s/'-msse2',?[[:space:]]*//g" \
+        -e "s/'-stdlib=libc\\+\\+',?[[:space:]]*//g" \
+        -e "s/'-march=native'/'-march=armv8-a'/g" \
+        "${BYTEPS_PATH}/setup.py"; \
+      if [ -d "${BYTEPS_PATH}/3rdparty/ps-lite" ]; then \
+        grep -RIl -- "-msse2" "${BYTEPS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-msse2([[:space:]]|$)/ /g'; \
+        grep -RIl -- "-mno-avx512f" "${BYTEPS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-mno-avx512f([[:space:]]|$)/ /g'; \
+      fi; \
+    fi
+
+# arm64 server-only half_t 修复
+RUN set -eux; \
+    python3 - <<'PY'
+import subprocess, re, sys
+from pathlib import Path
+
+arch = subprocess.check_output(["dpkg", "--print-architecture"], text=True).strip()
+if arch != "arm64":
+    print("arch =", arch, "skip half_t patch")
+    sys.exit(0)
+
+p = Path("/usr/local/byteps/byteps/common/compressor/common.h")
+t = p.read_text()
+marker = "BYTEPS_ARM64_SERVER_HALF_T_FIX_V2"
+
+if marker in t:
+    print("half_t fix already applied")
+    sys.exit(0)
+
+t = re.sub(
+    r"^(\s*)(using\s+half_t\s*=\s*mshadow::half::half_t\s*;\s*)$",
+    r"\1#if !defined(BYTEPS_BUILDING_SERVER)\n\1\2\n\1#endif\n",
+    t,
+    count=1,
+    flags=re.M,
+)
+t = re.sub(
+    r"^(\s*)(typedef\s+mshadow::half::half_t\s+half_t\s*;\s*)$",
+    r"\1#if !defined(BYTEPS_BUILDING_SERVER)\n\1\2\n\1#endif\n",
+    t,
+    count=1,
+    flags=re.M,
+)
+
+block = (
+    f"/* {marker} */\n"
+    f"#if defined(BYTEPS_BUILDING_SERVER)\n"
+    f"#include <stdint.h>\n"
+    f"typedef uint16_t half_t;\n"
+    f"#endif\n\n"
+)
+
+ns = re.search(r"^\s*namespace\b", t, flags=re.M)
+t = (t[:ns.start()] + block + t[ns.start():]) if ns else (block + t)
+
+p.write_text(t)
+print("patched:", p)
+PY
+
+# server-only：build_server 后直接 return，跳过 TF/Torch/MXNet 插件
+RUN set -eux; \
+    python3 - <<'PY'
+from pathlib import Path
+import re, sys
+
+p = Path("/usr/local/byteps/setup.py")
+t = p.read_text()
+marker = "BYTEPS_SERVER_ONLY_PATCH"
+
+if marker in t:
+    print("server-only patch already applied")
+    sys.exit(0)
+
+pat = re.compile(r"^(\s*)build_server\(\s*self\s*,\s*options\s*\)\s*$", re.M)
+m = pat.search(t)
+if not m:
+    raise SystemExit("cannot find build_server(self, options) call to patch")
+
+indent = m.group(1)
+ins = (
+    f"{indent}# {marker}\n"
+    f"{indent}import os as _os\n"
+    f"{indent}if _os.environ.get('BYTEPS_SERVER_ONLY','0') == '1':\n"
+    f"{indent}    print('INFO: BYTEPS_SERVER_ONLY=1; server built; skip TF/Torch/MXNet plugins')\n"
+    f"{indent}    return\n"
+)
+
+t = t[:m.end()] + "\n" + ins + t[m.end():]
+p.write_text(t)
+print("patched:", p)
+PY
+
+# server-only: 只编 ps-lite 的 ps 目标，并使用系统 libzmq，避免 tests 链接到不兼容的 libzmq.a
+RUN set -eux; \
+    python3 - <<'PY'
+from pathlib import Path
+import sys
+
+p = Path("/usr/local/byteps/setup.py")
+t = p.read_text()
+marker = "BYTEPS_SERVER_ONLY_ZMQ_PATCH"
+
+if marker in t:
+    print("server-only zmq patch already applied")
+    sys.exit(0)
+
+old = "    EXTRA_OBJECTS = ['3rdparty/ps-lite/build/libps.a',\n                     '3rdparty/ps-lite/deps/lib/libzmq.a']\n"
+new = (
+    "    # BYTEPS_SERVER_ONLY_ZMQ_PATCH\n"
+    "    if os.environ.get('BYTEPS_SERVER_ONLY','0') == '1':\n"
+    "        EXTRA_OBJECTS = ['3rdparty/ps-lite/build/libps.a']\n"
+    "        LIBRARIES += ['zmq']\n"
+    "    else:\n"
+    "        EXTRA_OBJECTS = ['3rdparty/ps-lite/build/libps.a',\n"
+    "                         '3rdparty/ps-lite/deps/lib/libzmq.a']\n"
+)
+if old not in t:
+    raise SystemExit("cannot find EXTRA_OBJECTS block to patch")
+t = t.replace(old, new, 1)
+
+old2 = "            make_process = subprocess.Popen('make ' + make_option,\n"
+new2 = (
+    "            make_cmd = 'make ps ' + make_option if os.environ.get('BYTEPS_SERVER_ONLY','0') == '1' else 'make ' + make_option\n"
+    "            make_process = subprocess.Popen(make_cmd,\n"
+)
+if old2 not in t:
+    raise SystemExit("cannot find make subprocess block to patch")
+t = t.replace(old2, new2, 1)
+
+old3 = (
+    "    if has_rdma_header():\n"
+    "        server_lib.libraries = ['rdmacm', 'ibverbs', 'rt']\n"
+    "    else:\n"
+    "        server_lib.libraries = []\n"
+)
+new3 = (
+    "    if has_rdma_header():\n"
+    "        server_lib.libraries = ['rdmacm', 'ibverbs', 'rt']\n"
+    "    else:\n"
+    "        server_lib.libraries = []\n"
+    "    if os.environ.get('BYTEPS_SERVER_ONLY','0') == '1':\n"
+    "        server_lib.libraries += ['zmq']\n"
+)
+if old3 not in t:
+    raise SystemExit("cannot find build_server library block to patch")
+t = t.replace(old3, new3, 1)
+
+p.write_text(t)
+print("patched:", p)
+PY
+
+RUN set -eux; \
+    cd "${BYTEPS_PATH}"; \
+    python3 setup.py install; \
+    ldconfig
+
+CMD ["bash"]
