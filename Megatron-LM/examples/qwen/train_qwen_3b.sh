@@ -27,10 +27,12 @@ export NCCL_DEBUG=${NCCL_DEBUG:-INFO}
 export NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-COLL}
 export NCCL_DEBUG_FILE=${NCCL_DEBUG_FILE:-nccl_${HOSTNAME}_rank${NODE_RANK}.log}
 export NCCL_DEBUG_LEVEL=${NCCL_DEBUG_LEVEL:-TRACE}
+export USE_DPU=${USE_DPU:-0}
+export USE_OVERLAP=${USE_OVERLAP:-1}
 
 # Keep GDR disabled by default unless you have
 # already validated the GDR build/runtime path.
-export DMLC_USE_GDR=${DMLC_USE_GDR:-0}
+export DMLC_USE_GDR=${DMLC_USE_GDR:-1}
 export BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH:-512}
 export BYTEPS_RDMA_START_DEPTH=${BYTEPS_RDMA_START_DEPTH:-16}
 export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
@@ -40,26 +42,112 @@ export BYTEPS_PARTITION_BYTES=${BYTEPS_PARTITION_BYTES:-4096000}
 # Keep the current default behavior: multi-node single-GPU.
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1}
 
+extract_primary_hca() {
+    local hca="${NCCL_IB_HCA:-}"
+    hca="${hca%%,*}"
+    hca="${hca%%:*}"
+    hca="${hca#^}"
+    hca="${hca#=}"
+    printf '%s' "$hca"
+}
+
+detect_iface_from_hca() {
+    local hca="$1"
+    if [[ -z "${hca}" ]]; then
+        return
+    fi
+    ls "/sys/class/infiniband/${hca}/device/net" 2>/dev/null | head -n1
+}
+
+detect_ip_from_iface() {
+    local iface="$1"
+    if [[ -z "${iface}" ]]; then
+        return
+    fi
+    ip -4 -o addr show dev "${iface}" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1
+}
+
 export DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-2}
-export DMLC_INTERFACE=${DMLC_INTERFACE:-ens39f1np1}
-export DMLC_PS_ROOT_URI=${DMLC_PS_ROOT_URI:-192.168.1.10}
+export NCCL_IB_HCA=${NCCL_IB_HCA:-mlx5_1}
+PRIMARY_HCA=$(extract_primary_hca)
+AUTO_DMLC_INTERFACE=$(detect_iface_from_hca "${PRIMARY_HCA}")
+export DMLC_INTERFACE=${DMLC_INTERFACE:-${AUTO_DMLC_INTERFACE:-ens39f1np1}}
+LOCAL_DETECTED_IP=$(detect_ip_from_iface "${DMLC_INTERFACE}")
 export DMLC_PS_ROOT_PORT=${DMLC_PS_ROOT_PORT:-9010}
-export DMLC_NODE_HOST=${DMLC_NODE_HOST:-$(ip -4 -o addr show dev "$DMLC_INTERFACE" | awk '{print $4}' | cut -d/ -f1 | head -n1)}
+export DMLC_NODE_HOST=${DMLC_NODE_HOST:-${LOCAL_DETECTED_IP}}
 
 export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-0}
 export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-$DMLC_INTERFACE}
-export NCCL_IB_HCA=${NCCL_IB_HCA:-mlx5_1}
 export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-$DMLC_INTERFACE}
+
+MASTER_ADDR_VALUE=${MASTER_ADDR:-}
+DMLC_PS_ROOT_URI_VALUE=${DMLC_PS_ROOT_URI:-}
+if [[ -z "${MASTER_ADDR_VALUE}" && -n "${DMLC_PS_ROOT_URI_VALUE}" ]]; then
+    MASTER_ADDR_VALUE="${DMLC_PS_ROOT_URI_VALUE}"
+fi
+if [[ -z "${DMLC_PS_ROOT_URI_VALUE}" && -n "${MASTER_ADDR_VALUE}" ]]; then
+    DMLC_PS_ROOT_URI_VALUE="${MASTER_ADDR_VALUE}"
+fi
+if [[ -z "${MASTER_ADDR_VALUE}" ]]; then
+    if [[ "${NODE_RANK}" == "0" && -n "${LOCAL_DETECTED_IP}" ]]; then
+        MASTER_ADDR_VALUE="${LOCAL_DETECTED_IP}"
+    else
+        MASTER_ADDR_VALUE="192.168.1.10"
+    fi
+fi
+if [[ -z "${DMLC_PS_ROOT_URI_VALUE}" ]]; then
+    DMLC_PS_ROOT_URI_VALUE="${MASTER_ADDR_VALUE}"
+fi
+export MASTER_ADDR="${MASTER_ADDR_VALUE}"
+export DMLC_PS_ROOT_URI="${DMLC_PS_ROOT_URI_VALUE}"
 
 TOKENIZER_ARG=${3:-"MOCK"}
 DATA_ARG=${4:-"MOCK"}
+
+############################################
+# NUMA binding
+############################################
+detect_numa_from_iface() {
+    cat "/sys/class/net/${DMLC_INTERFACE}/device/numa_node" 2>/dev/null || echo "-1"
+}
+
+detect_cpulist_from_iface() {
+    cat "/sys/class/net/${DMLC_INTERFACE}/device/local_cpulist" 2>/dev/null || echo ""
+}
+
+build_numactl_prefix() {
+    local node="$1"
+    local cpulist="$2"
+
+    NUMACTL_PREFIX=()
+    if ! command -v numactl >/dev/null 2>&1; then
+        return
+    fi
+
+    if [[ -n "${cpulist}" ]]; then
+        if [[ -n "${node}" && "${node}" != "-1" ]]; then
+            NUMACTL_PREFIX=(numactl --physcpubind="${cpulist}" --membind="${node}")
+        else
+            NUMACTL_PREFIX=(numactl --physcpubind="${cpulist}" --localalloc)
+        fi
+        return
+    fi
+
+    if [[ -n "${node}" && "${node}" != "-1" ]]; then
+        NUMACTL_PREFIX=(numactl --cpunodebind="${node}" --membind="${node}")
+    fi
+}
+
+NUMA_NODE=${NUMA_NODE:-$(detect_numa_from_iface)}
+CPU_LIST=${CPU_LIST:-$(detect_cpulist_from_iface)}
+NUMACTL_PREFIX=()
+build_numactl_prefix "${NUMA_NODE}" "${CPU_LIST}"
 
 ############################################
 # Distributed setup
 ############################################
 GPUS_PER_NODE=${GPUS_PER_NODE:-1}
 NUM_NODES=${NUM_NODES:-2}
-MASTER_ADDR=${MASTER_ADDR:-192.168.1.10}
 MASTER_PORT=${MASTER_PORT:-19002}
 WORLD_SIZE=$((GPUS_PER_NODE * NUM_NODES))
 
@@ -139,10 +227,13 @@ MODEL_ARGS=(
     --init-method-std 0.02
 
     --log-interval 1
-    --train-iters 5
+    --train-iters 10
     --no-rope-fusion
-    --use-dpu-reduce
 )
+
+if [[ "${USE_DPU}" == "1" ]]; then
+    MODEL_ARGS+=(--use-dpu-reduce)
+fi
 
 ############################################
 # Training args
@@ -163,14 +254,14 @@ TRAINING_ARGS=(
     --cross-entropy-loss-fusion
     --calculate-per-token-loss
 
-    # --use-distributed-optimizer
-    # --overlap-grad-reduce
-    # --overlap-param-gather
-
     --manual-gc
     --empty-unused-memory-level 1
     --exit-duration-in-mins 235
 )
+
+if [[ "${USE_OVERLAP}" == "1" ]]; then
+    TRAINING_ARGS+=(--overlap-grad-reduce)
+fi
 
 ############################################
 # FP8 args
@@ -249,7 +340,12 @@ CMD=(python "$PRETRAIN_SCRIPT_PATH"
 ############################################
 # Launch
 ############################################
-torchrun "${DISTRIBUTED_ARGS[@]}" bash -c '
+echo "[net] HCA=${PRIMARY_HCA:-unset} IF=${DMLC_INTERFACE} LOCAL_IP=${LOCAL_DETECTED_IP:-unset} MASTER_ADDR=${MASTER_ADDR} ROOT=${DMLC_PS_ROOT_URI}"
+echo "[dpu] USE_DPU=${USE_DPU}"
+echo "[overlap] USE_OVERLAP=${USE_OVERLAP}"
+echo "[numa] NUMA_NODE=${NUMA_NODE} CPU_LIST='${CPU_LIST}' IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST}"
+
+"${NUMACTL_PREFIX[@]}" torchrun "${DISTRIBUTED_ARGS[@]}" bash -c '
 export DMLC_ROLE=worker
 export DMLC_NUM_WORKER='"$DMLC_NUM_WORKER"'
 export DMLC_NUM_SERVER='"$DMLC_NUM_SERVER"'
@@ -267,4 +363,3 @@ echo "[byteps] DMLC_NUM_WORKER=$DMLC_NUM_WORKER BYTEPS_LOCAL_SIZE=$BYTEPS_LOCAL_
 
 exec "$@"
 ' bash "${CMD[@]}"
-
