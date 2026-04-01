@@ -34,19 +34,19 @@ struct Endpoint {
   int node_id;
   std::condition_variable cv;
   std::mutex connect_mu;
-  struct rdma_cm_id *cm_id;
+  struct rdma_cm_id* cm_id;
   bool isDataPlane;
   std::shared_ptr<Transport> trans;
 
   int kStartDepth = 128;
   int kRxDepth = 2048;
   int kReplyDepth = kRxDepth;
-  WRContext *rx_ctx;
-  WRContext *start_ctx;
-  WRContext *reply_ctx;
+  WRContext* rx_ctx;
+  WRContext* start_ctx;
+  WRContext* reply_ctx;
 
-  ThreadsafeQueue<WRContext *> free_start_ctx;
-  ThreadsafeQueue<WRContext *> free_reply_ctx;
+  ThreadsafeQueue<WRContext*> free_start_ctx;
+  ThreadsafeQueue<WRContext*> free_reply_ctx;
 
   bool inited = false;
 
@@ -59,9 +59,11 @@ struct Endpoint {
         start_ctx(nullptr),
         reply_ctx(nullptr) {
     auto byteps_rx_depth = Environment::Get()->find("BYTEPS_RDMA_RX_DEPTH");
+    auto byteps_ctrl_rx_depth =
+        Environment::Get()->find("BYTEPS_RDMA_CTRL_RX_DEPTH");
     auto byteps_start_depth =
         Environment::Get()->find("BYTEPS_RDMA_START_DEPTH");
-    const char *role_val = CHECK_NOTNULL(Environment::Get()->find("DMLC_ROLE"));
+    const char* role_val = CHECK_NOTNULL(Environment::Get()->find("DMLC_ROLE"));
     std::string role_str(role_val);
     // for joint mode with large number of workers, the default value of rx/tx
     // depth is reduced for less memory consumption.
@@ -70,14 +72,18 @@ struct Endpoint {
       kRxDepth = 16;
     }
     kStartDepth = byteps_start_depth ? atoi(byteps_start_depth) : kStartDepth;
-    kRxDepth = byteps_rx_depth ? atoi(byteps_rx_depth) : kRxDepth;
+    int default_rx_depth = byteps_rx_depth ? atoi(byteps_rx_depth) : kRxDepth;
     if (!isDataPlane) {
-      kRxDepth = std::min(kRxDepth, 64);
+      kRxDepth = byteps_ctrl_rx_depth ? atoi(byteps_ctrl_rx_depth)
+                                      : std::min(default_rx_depth, 128);
+    } else {
+      kRxDepth = default_rx_depth;
     }
     kReplyDepth = kRxDepth;
 
-    start_ctx = new WRContext[kStartDepth];
-    reply_ctx = new WRContext[kReplyDepth];
+    start_ctx = new WRContext[kStartDepth]();
+    reply_ctx = new WRContext[kReplyDepth]();
+    rx_ctx = new WRContext[kRxDepth]();
   }
 
   ~Endpoint() {
@@ -126,14 +132,14 @@ struct Endpoint {
 
   void SetNodeID(int id) { node_id = id; }
 
-  void InitSendContextHelper(struct ibv_pd *pd, WRContext *ctx,
-                             ThreadsafeQueue<WRContext *> *queue, size_t num,
+  void InitSendContextHelper(struct ibv_pd* pd, WRContext* ctx,
+                             ThreadsafeQueue<WRContext*>* queue, size_t num,
                              WRContextType type) {
     for (size_t i = 0; i < num; ++i) {
-      void *buf;
-      aligned_malloc((void **)&buf, kMempoolChunkSize);
+      void* buf;
+      aligned_malloc((void**)&buf, kMempoolChunkSize);
       CHECK(buf);
-      struct ibv_mr *mr = ibv_reg_mr(pd, buf, kMempoolChunkSize, 0);
+      struct ibv_mr* mr = ibv_reg_mr(pd, buf, kMempoolChunkSize, 0);
       CHECK(mr) << "ibv_reg_mr failed: " << strerror(errno)
                 << "\nYou can try to reduce BYTEPS_RDMA_START_DEPTH (current "
                 << kStartDepth << ") or BYTEPS_RDMA_RX_DEPTH (current "
@@ -142,13 +148,13 @@ struct Endpoint {
       ctx[i].type = type;
       ctx[i].buffer = mr;
       ctx[i].private_data = this;
-      ctx[i].dataPlane=false;
+      ctx[i].dataPlane = false;
       queue->Push(&ctx[i]);
     }
   }
 
-  void Init(struct ibv_cq *cq, struct ibv_pd *pd,
-            struct ibv_srq *srq = nullptr) {
+  void Init(struct ibv_cq* cq, struct ibv_pd* pd,
+            struct ibv_srq* srq = nullptr) {
     struct ibv_qp_init_attr attr;
     memset(&attr, 0, sizeof(ibv_qp_init_attr));
     attr.send_cq = cq;
@@ -157,7 +163,7 @@ struct Endpoint {
     attr.cap.max_recv_wr = srq ? 1 : kRxDepth;
     attr.cap.max_send_sge = kSGEntry;
     attr.cap.max_recv_sge = kSGEntry;
-    attr.cap.max_inline_data=256;
+    attr.cap.max_inline_data = 256;
     attr.qp_type = IBV_QPT_RC;
     attr.sq_sig_all = 0;
     attr.srq = srq;
@@ -173,15 +179,12 @@ struct Endpoint {
     }
 
     if (!srq) {
-      if (inited == false) {
-        rx_ctx = new WRContext[kRxDepth];
-      }
       for (int i = 0; i < kRxDepth; ++i) {
         if (inited == false) {
-          void *buf;
-          aligned_malloc((void **)&buf, kMempoolChunkSize);
+          void* buf;
+          aligned_malloc((void**)&buf, kMempoolChunkSize);
           CHECK(buf);
-          struct ibv_mr *mr =
+          struct ibv_mr* mr =
               ibv_reg_mr(pd, buf, kMempoolChunkSize, IBV_ACCESS_LOCAL_WRITE);
           CHECK(mr)
               << "ibv_reg_mr failed: " << strerror(errno)
@@ -199,7 +202,7 @@ struct Endpoint {
     inited = true;
   }
 
-  void PostRecv(WRContext *ctx) {
+  void PostRecv(WRContext* ctx) {
     struct ibv_recv_wr wr, *bad_wr = nullptr;
     memset(&wr, 0, sizeof(wr));
 
@@ -220,40 +223,42 @@ struct Endpoint {
 
 class Transport {
  public:
-  virtual void RDMAWriteWithImm(MessageBuffer *msg_buf, uint64_t remote_addr,
-                                uint32_t rkey, uint32_t idx,bool inline_write=false,struct ibv_send_wr *prev_wr = nullptr) = 0;
+  virtual void RDMAWriteWithImm(MessageBuffer* msg_buf, uint64_t remote_addr,
+                                uint32_t rkey, uint32_t idx,
+                                bool inline_write = false,
+                                struct ibv_send_wr* prev_wr = nullptr) = 0;
 
-  virtual int RecvPushRequest(Message *msg, BufferContext *buffer_ctx,
+  virtual int RecvPushRequest(Message* msg, BufferContext* buffer_ctx,
                               int meta_len) = 0;
-  virtual int RecvPullRequest(Message *msg, BufferContext *buffer_ctx,
+  virtual int RecvPullRequest(Message* msg, BufferContext* buffer_ctx,
                               int meta_len) = 0;
-  virtual int RecvPushResponse(Message *msg, BufferContext *buffer_ctx,
+  virtual int RecvPushResponse(Message* msg, BufferContext* buffer_ctx,
                                int meta_len) = 0;
-  virtual int RecvPullResponse(Message *msg, BufferContext *buffer_ctx,
+  virtual int RecvPullResponse(Message* msg, BufferContext* buffer_ctx,
                                int meta_len) = 0;
 
-  virtual void Send(Message &msg, MessageBuffer *msg_buf,
+  virtual void Send(Message& msg, MessageBuffer* msg_buf,
                     RemoteTuple remote_tuple) = 0;
-  virtual void SendPullRequest(Message &msg, MessageBuffer *msg_buf,
+  virtual void SendPullRequest(Message& msg, MessageBuffer* msg_buf,
                                RemoteTuple remote_tuple) = 0;
-  virtual void SendPushRequest(Message &msg, MessageBuffer *msg_buf,
+  virtual void SendPushRequest(Message& msg, MessageBuffer* msg_buf,
                                RemoteTuple remote_tuple) = 0;
-  virtual void SendPushResponse(Message &msg, MessageBuffer *msg_buf,
+  virtual void SendPushResponse(Message& msg, MessageBuffer* msg_buf,
                                 RemoteTuple remote_tuple) = 0;
-  virtual void SendPullResponse(Message &msg, MessageBuffer *msg_buf,
+  virtual void SendPullResponse(Message& msg, MessageBuffer* msg_buf,
                                 RemoteTuple remote_tuple, size_t lkey) = 0;
-  virtual void SendRendezvousBegin(Message &msg, MessageBuffer *msg_buf) = 0;
-  virtual void SendRendezvousReply(RendezvousStart *req,
-                                   AddressPool<BufferContext> &pool) = 0;
+  virtual void SendRendezvousBegin(Message& msg, MessageBuffer* msg_buf) = 0;
+  virtual void SendRendezvousReply(RendezvousStart* req,
+                                   AddressPool<BufferContext>& pool) = 0;
 
-  virtual SArray<char> CreateFunctionalSarray(void *value, size_t size) = 0;
+  virtual SArray<char> CreateFunctionalSarray(void* value, size_t size) = 0;
 
 };  // class Transport
 
 class RDMATransport : public Transport {
  public:
-  explicit RDMATransport(Endpoint *endpoint, MemoryAllocator *allocator,
-                         Postoffice *postoffice) {
+  explicit RDMATransport(Endpoint* endpoint, MemoryAllocator* allocator,
+                         Postoffice* postoffice) {
     endpoint_ = CHECK_NOTNULL(endpoint);
     allocator_ = CHECK_NOTNULL(allocator);
     pagesize_ = sysconf(_SC_PAGESIZE);
@@ -262,12 +267,12 @@ class RDMATransport : public Transport {
     is_server_ = postoffice_->is_server();
   };
 
-  ~RDMATransport(){};
+  ~RDMATransport() {};
 
-  virtual void RDMAWriteWithImm(MessageBuffer *msg_buf, uint64_t remote_addr,
+  virtual void RDMAWriteWithImm(MessageBuffer* msg_buf, uint64_t remote_addr,
                                 uint32_t rkey, uint32_t idx,
-                                bool inline_write=false,
-                                struct ibv_send_wr *prev_wr = nullptr) {
+                                bool inline_write = false,
+                                struct ibv_send_wr* prev_wr = nullptr) {
     struct ibv_sge sge;
     sge.addr = reinterpret_cast<uint64_t>(msg_buf->inline_buf);
     sge.length = msg_buf->inline_len;
@@ -288,69 +293,93 @@ class RDMATransport : public Transport {
     if (inline_write) {
       wr.send_flags |= IBV_SEND_INLINE;
     }
-    int ret=0;
-    if (prev_wr){
-      prev_wr->next=&wr;
-      ret=ibv_post_send(endpoint_->cm_id->qp,prev_wr,&bad_wr);
-    }else{
+    int ret = 0;
+    if (prev_wr) {
+      prev_wr->next = &wr;
+      ret = ibv_post_send(endpoint_->cm_id->qp, prev_wr, &bad_wr);
+    } else {
       ret = ibv_post_send(endpoint_->cm_id->qp, &wr, &bad_wr);
     }
     if (ret != 0) {
       // --- 详细调试信息开始 ---
-      
+
       // 获取 QP 状态字符串
       const char* qp_state_str = "UNKNOWN";
       if (endpoint_->cm_id->qp) {
         switch (endpoint_->cm_id->qp->state) {
-          case IBV_QPS_RESET: qp_state_str = "RESET"; break;
-          case IBV_QPS_INIT: qp_state_str = "INIT"; break;
-          case IBV_QPS_RTR: qp_state_str = "RTR"; break;
-          case IBV_QPS_RTS: qp_state_str = "RTS"; break;
-          case IBV_QPS_SQD: qp_state_str = "SQD"; break;
-          case IBV_QPS_SQE: qp_state_str = "SQE"; break;
-          case IBV_QPS_ERR: qp_state_str = "ERR"; break;
-          default: qp_state_str = "UNKNOWN"; break;
+          case IBV_QPS_RESET:
+            qp_state_str = "RESET";
+            break;
+          case IBV_QPS_INIT:
+            qp_state_str = "INIT";
+            break;
+          case IBV_QPS_RTR:
+            qp_state_str = "RTR";
+            break;
+          case IBV_QPS_RTS:
+            qp_state_str = "RTS";
+            break;
+          case IBV_QPS_SQD:
+            qp_state_str = "SQD";
+            break;
+          case IBV_QPS_SQE:
+            qp_state_str = "SQE";
+            break;
+          case IBV_QPS_ERR:
+            qp_state_str = "ERR";
+            break;
+          default:
+            qp_state_str = "UNKNOWN";
+            break;
         }
       }
 
-      // 检查内存是否真的被注册了 (尝试反向查找，如果 allocator 支持的话，这里只是打印原始值)
-      // 注意：如果 lkey 是 0 或 0xffffffff，通常意味着未注册
-      
+      // 检查内存是否真的被注册了 (尝试反向查找，如果 allocator
+      // 支持的话，这里只是打印原始值) 注意：如果 lkey 是 0 或
+      // 0xffffffff，通常意味着未注册
+
       LOG(FATAL) << "\n========== RDMA WRITE FAILURE DUMP =========="
-               << "\n[Error Code] errno: " << strerror(errno) << " (" << errno << ")"
-               << "\n[ret] ret:" << ret
-               << "\n[QP State]   Current State: " << qp_state_str 
-               << " (If ERR, previous operation failed)"
-               << "\n[WR Info]    Opcode: IBV_WR_RDMA_WRITE_WITH_IMM"
-               << "\n             WR_ID: " << std::hex << wr.wr_id << std::dec
-               << "\n             Imm Data: " << idx
-               << "\n             Send Flags: " << std::hex << wr.send_flags << std::dec
-               << (inline_write ? " (INLINE)" : " (NO INLINE)")
-               << "\n[SGE Info]   Local Addr:  " << std::hex << sge.addr << std::dec
-               << "\n             Length:     " << sge.length
-               << "\n             LKey:       " << std::hex << sge.lkey << std::dec
-               << (sge.lkey == 0 || sge.lkey == 0xffffffff ? " [WARNING: Invalid LKey!]" : "")
-               << "\n[Remote Info] Remote Addr: " << std::hex << remote_addr << std::dec
-               << "\n             Remote RKey: " << std::hex << rkey << std::dec
-               << (rkey == 0 || rkey == 0xffffffff ? " [WARNING: Invalid RKey!]" : "")
-               << "\n[Bad WR]     Failed WR ID: " << (bad_wr ? std::to_string(bad_wr->wr_id) : "nullptr")
-               << "\n[Context]    MsgBuf Ptr: " << msg_buf
-               << "\n             Inline Buf: " << msg_buf->inline_buf
-               << "\n             Inline Len: " << msg_buf->inline_len
-               << "\n=============================================";
-               
+                 << "\n[Error Code] errno: " << strerror(errno) << " (" << errno
+                 << ")"
+                 << "\n[ret] ret:" << ret
+                 << "\n[QP State]   Current State: " << qp_state_str
+                 << " (If ERR, previous operation failed)"
+                 << "\n[WR Info]    Opcode: IBV_WR_RDMA_WRITE_WITH_IMM"
+                 << "\n             WR_ID: " << std::hex << wr.wr_id << std::dec
+                 << "\n             Imm Data: " << idx
+                 << "\n             Send Flags: " << std::hex << wr.send_flags
+                 << std::dec << (inline_write ? " (INLINE)" : " (NO INLINE)")
+                 << "\n[SGE Info]   Local Addr:  " << std::hex << sge.addr
+                 << std::dec << "\n             Length:     " << sge.length
+                 << "\n             LKey:       " << std::hex << sge.lkey
+                 << std::dec
+                 << (sge.lkey == 0 || sge.lkey == 0xffffffff
+                         ? " [WARNING: Invalid LKey!]"
+                         : "")
+                 << "\n[Remote Info] Remote Addr: " << std::hex << remote_addr
+                 << std::dec << "\n             Remote RKey: " << std::hex
+                 << rkey << std::dec
+                 << (rkey == 0 || rkey == 0xffffffff
+                         ? " [WARNING: Invalid RKey!]"
+                         : "")
+                 << "\n[Bad WR]     Failed WR ID: "
+                 << (bad_wr ? std::to_string(bad_wr->wr_id) : "nullptr")
+                 << "\n[Context]    MsgBuf Ptr: " << msg_buf
+                 << "\n             Inline Buf: " << msg_buf->inline_buf
+                 << "\n             Inline Len: " << msg_buf->inline_len
+                 << "\n=============================================";
+
       // 程序会在这里终止，因为 LOG(FATAL)
     }
-    CHECK_EQ(ret, 0)
-        << "ibv_post_send failed.";
+    CHECK_EQ(ret, 0) << "ibv_post_send failed.";
   }
 
-  void SendRendezvousBegin(Message &msg, MessageBuffer *msg_buf) {
-    WRContext *context = nullptr;
+  void SendRendezvousBegin(Message& msg, MessageBuffer* msg_buf) {
+    WRContext* context = nullptr;
     endpoint_->free_start_ctx.WaitAndPop(&context);
 
-    RendezvousStart *req =
-        reinterpret_cast<RendezvousStart *>(context->buffer->addr);
+    RendezvousStart* req =
+        reinterpret_cast<RendezvousStart*>(context->buffer->addr);
     req->meta_len = msg_buf->inline_len;
     req->origin_addr = reinterpret_cast<uint64_t>(msg_buf);
     req->data_num = msg_buf->data.size();
@@ -378,9 +407,9 @@ class RDMATransport : public Transport {
         << strerror(errno);
   }
 
-  void SendRendezvousReply(RendezvousStart *req,
-                           AddressPool<BufferContext> &addrpool) {
-    BufferContext *buf_ctx = new BufferContext();
+  void SendRendezvousReply(RendezvousStart* req,
+                           AddressPool<BufferContext>& addrpool) {
+    BufferContext* buf_ctx = new BufferContext();
     buf_ctx->meta_len = req->meta_len;
     buf_ctx->data_num = req->data_num;
 
@@ -391,17 +420,17 @@ class RDMATransport : public Transport {
     }
 
     // worker only needs a buffer for receving meta
-    char *buffer = allocator_->Alloc(
+    char* buffer = allocator_->Alloc(
         is_server_ ? (align_ceil(req->meta_len, pagesize_) + data_len)
                    : req->meta_len);
     CHECK(buffer);
     buf_ctx->buffer = buffer;
 
-    WRContext *reply_ctx = nullptr;
+    WRContext* reply_ctx = nullptr;
     endpoint_->free_reply_ctx.WaitAndPop(&reply_ctx);
 
-    RendezvousReply *resp =
-        reinterpret_cast<RendezvousReply *>(reply_ctx->buffer->addr);
+    RendezvousReply* resp =
+        reinterpret_cast<RendezvousReply*>(reply_ctx->buffer->addr);
 
     resp->addr = reinterpret_cast<uint64_t>(buffer);
     resp->rkey = allocator_->RemoteKey(buffer);
@@ -430,15 +459,15 @@ class RDMATransport : public Transport {
         << "ibv_post_send failed.";
   }
 
-  void Send(Message &msg, MessageBuffer *msg_buf, RemoteTuple remote_tuple) {
+  void Send(Message& msg, MessageBuffer* msg_buf, RemoteTuple remote_tuple) {
     auto raddr = std::get<0>(remote_tuple);
     auto rkey = std::get<1>(remote_tuple);
     auto idx = std::get<2>(remote_tuple);
 
-    RDMAWriteWithImm(msg_buf, raddr, rkey, idx,true);
+    RDMAWriteWithImm(msg_buf, raddr, rkey, idx, true);
   }
 
-  void SendPushRequest(Message &msg, MessageBuffer *msg_buf,
+  void SendPushRequest(Message& msg, MessageBuffer* msg_buf,
                        RemoteTuple remote_tuple) {
     CHECK_EQ(msg_buf->mrs.size(), 1);
     // #ifdef USE_GDR
@@ -448,12 +477,12 @@ class RDMATransport : public Transport {
     //     auto data_raddr = std::get<4>(remote_tuple);
     //     auto data_rkey = std::get<5>(remote_tuple);
     // #else
-        // CPU Server didnt have GDR, So Write To Meta+inline_len as before
-        auto meta_raddr = std::get<0>(remote_tuple);
-        auto meta_rkey = std::get<1>(remote_tuple);
-        auto idx = std::get<2>(remote_tuple);
-        auto data_raddr = meta_raddr + align_ceil(msg_buf->inline_len, pagesize_);
-        auto data_rkey = meta_rkey;
+    // CPU Server didnt have GDR, So Write To Meta+inline_len as before
+    auto meta_raddr = std::get<0>(remote_tuple);
+    auto meta_rkey = std::get<1>(remote_tuple);
+    auto idx = std::get<2>(remote_tuple);
+    auto data_raddr = meta_raddr + align_ceil(msg_buf->inline_len, pagesize_);
+    auto data_rkey = meta_rkey;
     // #endif
     // auto raddr = std::get<0>(remote_tuple);
     // auto rkey = std::get<1>(remote_tuple);
@@ -484,27 +513,28 @@ class RDMATransport : public Transport {
 
     // write to the next page-aligned address (remote_addr should already be
     // aligned)
-    // wr.wr.rdma.remote_addr = raddr + align_ceil(msg_buf->inline_len, pagesize_);
+    // wr.wr.rdma.remote_addr = raddr + align_ceil(msg_buf->inline_len,
+    // pagesize_);
     wr.wr.rdma.remote_addr = data_raddr;
     // CHECK_EQ(ibv_post_send(endpoint_->cm_id->qp, &wr, &bad_wr), 0)
     //     << "ibv_post_send failed.";
 
-    RDMAWriteWithImm(msg_buf, meta_raddr, meta_rkey, idx,true,&wr);
+    RDMAWriteWithImm(msg_buf, meta_raddr, meta_rkey, idx, true, &wr);
   }
 
-  void SendPullRequest(Message &msg, MessageBuffer *msg_buf,
+  void SendPullRequest(Message& msg, MessageBuffer* msg_buf,
                        RemoteTuple remote_tuple) {
     CHECK_EQ(msg_buf->mrs.size(), 0);
     Send(msg, msg_buf, remote_tuple);
   }
 
-  virtual void SendPushResponse(Message &msg, MessageBuffer *msg_buf,
+  virtual void SendPushResponse(Message& msg, MessageBuffer* msg_buf,
                                 RemoteTuple remote_tuple) {
     CHECK_EQ(msg_buf->mrs.size(), 0);
     Send(msg, msg_buf, remote_tuple);
   }
 
-  virtual void SendPullResponse(Message &msg, MessageBuffer *msg_buf,
+  virtual void SendPullResponse(Message& msg, MessageBuffer* msg_buf,
                                 RemoteTuple remote_tuple, size_t lkey) {
     CHECK_EQ(msg_buf->mrs.size(), 0);
 
@@ -517,16 +547,16 @@ class RDMATransport : public Transport {
     sge.addr = reinterpret_cast<uint64_t>(msg_buf->data[1].data());
     sge.length = len;
     sge.lkey = lkey;
-  
-    #ifdef USE_GDR
-        auto meta_raddr = std::get<0>(remote_tuple);
-        auto meta_rkey = std::get<1>(remote_tuple);
-        auto idx = std::get<2>(remote_tuple);
-    #else
-        auto meta_raddr = std::get<0>(remote_tuple);
-        auto meta_rkey = std::get<1>(remote_tuple);
-        auto idx = std::get<2>(remote_tuple);
-    #endif
+
+#ifdef USE_GDR
+    auto meta_raddr = std::get<0>(remote_tuple);
+    auto meta_rkey = std::get<1>(remote_tuple);
+    auto idx = std::get<2>(remote_tuple);
+#else
+    auto meta_raddr = std::get<0>(remote_tuple);
+    auto meta_rkey = std::get<1>(remote_tuple);
+    auto idx = std::get<2>(remote_tuple);
+#endif
 
     // this rdma-write will not trigger any signal both remotely and locally
     struct ibv_send_wr wr, *bad_wr = nullptr;
@@ -547,13 +577,13 @@ class RDMATransport : public Transport {
     RDMAWriteWithImm(msg_buf, meta_raddr, meta_rkey, idx, true);
   }
 
-  virtual int RecvPushResponse(Message *msg, BufferContext *buffer_ctx,
+  virtual int RecvPushResponse(Message* msg, BufferContext* buffer_ctx,
                                int meta_len) {
     CHECK_EQ(buffer_ctx->data_num, 0);
     return 0;
   }
 
-  virtual int RecvPullRequest(Message *msg, BufferContext *buffer_ctx,
+  virtual int RecvPullRequest(Message* msg, BufferContext* buffer_ctx,
                               int meta_len) {
     SArray<char> keys = CreateFunctionalSarray(&msg->meta.key, sizeof(Key));
 
@@ -565,17 +595,17 @@ class RDMATransport : public Transport {
     return keys.size() + vals.size();
   }
 
-  virtual int RecvPushRequest(Message *msg, BufferContext *buffer_ctx,
+  virtual int RecvPushRequest(Message* msg, BufferContext* buffer_ctx,
                               int meta_len) {
     CHECK(msg->meta.push && msg->meta.request);
     CHECK_EQ(buffer_ctx->data_num, 3);
-    char *cur = buffer_ctx->buffer + align_ceil((size_t)meta_len, pagesize_);
+    char* cur = buffer_ctx->buffer + align_ceil((size_t)meta_len, pagesize_);
 
     SArray<char> keys = CreateFunctionalSarray(&msg->meta.key, sizeof(Key));
 
     uint32_t len = msg->meta.val_len;
     SArray<char> vals;
-    vals.reset(cur, len, [](void *) {});  // no need to delete
+    vals.reset(cur, len, [](void*) {});  // no need to delete
     SArray<char> lens = CreateFunctionalSarray(&msg->meta.val_len, sizeof(int));
 
     msg->data.push_back(keys);
@@ -585,14 +615,13 @@ class RDMATransport : public Transport {
     return keys.size() + vals.size() + lens.size();
   }
 
-  virtual int RecvPullResponse(Message *msg, BufferContext *buffer_ctx,
+  virtual int RecvPullResponse(Message* msg, BufferContext* buffer_ctx,
                                int meta_len) {
     SArray<char> keys = CreateFunctionalSarray(&msg->meta.key, sizeof(Key));
 
     SArray<char> vals;
     auto addr = msg->meta.addr;
-    vals.reset(reinterpret_cast<char *>(addr), msg->meta.val_len,
-               [](void *) {});
+    vals.reset(reinterpret_cast<char*>(addr), msg->meta.val_len, [](void*) {});
 
     SArray<char> lens = CreateFunctionalSarray(&msg->meta.val_len, sizeof(int));
 
@@ -603,28 +632,28 @@ class RDMATransport : public Transport {
     return keys.size() + vals.size() + lens.size();
   }
 
-  SArray<char> CreateFunctionalSarray(void *value, size_t size) {
+  SArray<char> CreateFunctionalSarray(void* value, size_t size) {
     SArray<char> sarr;
-    void *p = malloc(size);
+    void* p = malloc(size);
     memcpy(p, value, size);
-    sarr.reset((char *)p, size, [p](void *) { free(p); });
+    sarr.reset((char*)p, size, [p](void*) { free(p); });
     return sarr;
   }
 
  protected:
   size_t pagesize_ = 4096;
-  Endpoint *endpoint_;
-  MemoryAllocator *allocator_;
+  Endpoint* endpoint_;
+  MemoryAllocator* allocator_;
   bool is_server_;
 
-  Postoffice *postoffice_;
+  Postoffice* postoffice_;
 
 };  // class Transport
 
 class IPCTransport : public RDMATransport {
  public:
-  explicit IPCTransport(Endpoint *endpoint, MemoryAllocator *allocator,
-                        Postoffice *postoffice)
+  explicit IPCTransport(Endpoint* endpoint, MemoryAllocator* allocator,
+                        Postoffice* postoffice)
       : RDMATransport(endpoint, allocator, postoffice) {
     auto val = Environment::Get()->find("BYTEPS_IPC_COPY_NUM_THREADS");
     ipc_copy_nthreads_ = val ? atoi(val) : 4;
@@ -680,15 +709,15 @@ class IPCTransport : public RDMATransport {
     }
   }
 
-  void SendPushRequest(Message &msg, MessageBuffer *msg_buf,
+  void SendPushRequest(Message& msg, MessageBuffer* msg_buf,
                        RemoteTuple remote_tuple) {
     Send(msg, msg_buf, remote_tuple);
   }
 
-  void SendPullResponse(Message &msg, MessageBuffer *msg_buf,
+  void SendPullResponse(Message& msg, MessageBuffer* msg_buf,
                         RemoteTuple remote_tuple, size_t lkey) {
-    auto addr = (void *)CHECK_NOTNULL(msg.data[1].data());
-    void *shm_addr = CHECK_NOTNULL(GetSharedMemory(shm_prefix_, msg.meta.key));
+    auto addr = (void*)CHECK_NOTNULL(msg.data[1].data());
+    void* shm_addr = CHECK_NOTNULL(GetSharedMemory(shm_prefix_, msg.meta.key));
 
     if (enable_async_copy_) {
       // async copy with a simple load-balancing strategy
@@ -703,7 +732,7 @@ class IPCTransport : public RDMATransport {
     }
   }
 
-  int RecvPushRequest(Message *msg, BufferContext *buffer_ctx, int meta_len) {
+  int RecvPushRequest(Message* msg, BufferContext* buffer_ctx, int meta_len) {
     // get data message from local shared memory
     auto key = msg->meta.key;
     auto len = msg->meta.val_len;
@@ -711,8 +740,8 @@ class IPCTransport : public RDMATransport {
     SArray<char> keys = CreateFunctionalSarray(&msg->meta.key, sizeof(Key));
 
     SArray<char> vals;
-    void *addr = GetSharedMemory(shm_prefix_, key);
-    vals.reset(reinterpret_cast<char *>(addr), len, [](void *) {});
+    void* addr = GetSharedMemory(shm_prefix_, key);
+    vals.reset(reinterpret_cast<char*>(addr), len, [](void*) {});
 
     SArray<char> lens = CreateFunctionalSarray(&msg->meta.val_len, sizeof(int));
 
@@ -725,16 +754,16 @@ class IPCTransport : public RDMATransport {
 
  private:
   struct AsyncCopy {
-    MessageBuffer *msg_buf;
+    MessageBuffer* msg_buf;
     RemoteTuple remote_tuple;
-    void *dst;
-    void *src;
+    void* dst;
+    void* src;
     int len;
     bool shutdown;
   };
 
   void AsyncCopyThread(int i) {
-    auto &q = async_copy_queue_[i];
+    auto& q = async_copy_queue_[i];
     while (true) {
       AsyncCopy m;
       q->WaitAndPop(&m);
@@ -754,7 +783,7 @@ class IPCTransport : public RDMATransport {
     }
   }
 
-  void *GetSharedMemory(const std::string &prefix, uint64_t key) {
+  void* GetSharedMemory(const std::string& prefix, uint64_t key) {
     std::lock_guard<std::mutex> lock(shm_mu_);
     auto worker_key = DecodeWorkerKey(key);
     auto seq_num = worker_key % (1 << 16);
@@ -779,7 +808,7 @@ class IPCTransport : public RDMATransport {
     auto base_key = worker_key - seq_num;
     uint64_t offset = byteps_partition_bytes_ * seq_num;
     if (key_shm_addr_.find(base_key) != key_shm_addr_.end()) {
-      return (void *)((char *)key_shm_addr_[base_key] + offset);
+      return (void*)((char*)key_shm_addr_[base_key] + offset);
     }
     std::string shm_name(prefix);
     shm_name += std::to_string(base_key);
@@ -791,19 +820,19 @@ class IPCTransport : public RDMATransport {
     CHECK_EQ(0, fstat(shm_fd, &sb)) << strerror(errno);
     auto total_shm_size = sb.st_size;
 
-    void *base_ptr =
+    void* base_ptr =
         mmap(0, total_shm_size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
-    CHECK_NE(base_ptr, (void *)-1) << strerror(errno);
+    CHECK_NE(base_ptr, (void*)-1) << strerror(errno);
     key_shm_addr_[base_key] = base_ptr;
 
     PS_VLOG(1) << "open Shared Memory: " << shm_name << " offset=" << offset
                << " (in bytes) size=" << total_shm_size;
-    return (void *)((char *)key_shm_addr_[base_key] + offset);
+    return (void*)((char*)key_shm_addr_[base_key] + offset);
   }
 
   int ipc_copy_nthreads_;
-  std::vector<std::thread *> ipc_copy_thread_list_;
-  std::vector<ThreadsafeQueue<AsyncCopy> *> async_copy_queue_;
+  std::vector<std::thread*> ipc_copy_thread_list_;
+  std::vector<ThreadsafeQueue<AsyncCopy>*> async_copy_queue_;
   std::atomic<unsigned long long> cpy_counter_{0};
 
   int byteps_partition_bytes_ = 4096000;
@@ -811,7 +840,7 @@ class IPCTransport : public RDMATransport {
   std::string shm_prefix_;
 
   std::mutex shm_mu_;
-  std::unordered_map<uint64_t, void *> key_shm_addr_;
+  std::unordered_map<uint64_t, void*> key_shm_addr_;
 
   bool enable_async_copy_;
   int encoding_scheme_version_ = 0;
