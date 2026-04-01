@@ -401,29 +401,27 @@ class _ParamAndGradBucketGroup:
                 for _, bucket in enumerate(self.buckets):
                     # 为 BytePS 构造一个稳定且全局唯一的 name，确保所有 rank 一致
                     name = f"dp_bucket_{bucket.bucket_id}"
-                    handle = bps_ops.push_pull_async(
+                    handle = bps_ops.push_pull_async_inplace(
                         bucket.grad_data,
                         average=byteps_average,
                         name=name,
                         version=0,
                         priority=0,
                     )
-                    handles.append((handle, bucket))
+                    handles.append(handle)
                 self.grad_reduce_handle = handles
                 return
             else:
                 for _, bucket in enumerate(self.buckets):
                     # 为 BytePS 构造一个稳定且全局唯一的 name，确保所有 rank 一致
                     name = f"dp_bucket_{bucket.bucket_id}"
-                    # BytePS 返回的是新的 tensor，不是 in-place，要拷回去
-                    reduced = bps.push_pull(
+                    bps.push_pull_inplace(
                         bucket.grad_data,
                         average=byteps_average,
                         name=name,
                         version=0,
                         priority=0,
                     )
-                    bucket.grad_data.copy_(reduced)
                 # 整个操作是同步完成的，不存在异步 handle
                 self.grad_reduce_handle = None
                 return
@@ -525,9 +523,8 @@ class _ParamAndGradBucketGroup:
                 f"({len(self.params_with_grad)}/{len(self.params)} params have grad available)"
             )
             handles = self.grad_reduce_handle
-            for handle, bucket in handles:
-                reduced = bps_ops.synchronize(handle)
-                bucket.grad_data.copy_(reduced)
+            for handle in handles:
+                bps_ops.synchronize(handle)
             self.grad_reduce_handle = None
 
     def register_grad_ready(self, param: torch.nn.Parameter):
