@@ -14,6 +14,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata ca-certificates git curl vim wget nano iproute2 \
     cmake build-essential \
     numactl libnuma-dev \
+    libzmq5 libzmq3-dev \
     ibverbs-providers librdmacm-dev ibverbs-utils rdmacm-utils libibverbs-dev \
     libucx-dev \
     python3-dev python3-pip python3-setuptools \
