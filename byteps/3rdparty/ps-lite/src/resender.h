@@ -69,13 +69,16 @@ class Resender {
       bool duplicated = it != acked_.end();
       if (!duplicated) acked_.insert(key);
       mu_.unlock();
-      // send back ack message (even if it is duplicated)
-      Message ack;
-      ack.meta.recver = msg.meta.sender;
-      ack.meta.sender = msg.meta.recver;
-      ack.meta.control.cmd = Control::ACK;
-      ack.meta.control.msg_sig = key;
-      van_->Send(ack);
+      // A node without an assigned id is not yet routable by ps-lite node id.
+      // Skip ACK until the scheduler has assigned a concrete id.
+      if (msg.meta.sender != Node::kEmpty) {
+        Message ack;
+        ack.meta.recver = msg.meta.sender;
+        ack.meta.sender = msg.meta.recver;
+        ack.meta.control.cmd = Control::ACK;
+        ack.meta.control.msg_sig = key;
+        van_->Send(ack);
+      }
       // warning
       if (duplicated)
         LOG(WARNING) << "Duplicated message: " << msg.DebugString();

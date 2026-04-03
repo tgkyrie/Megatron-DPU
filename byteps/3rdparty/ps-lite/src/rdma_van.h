@@ -216,14 +216,8 @@ class RDMAVan : public Van {
     CHECK_NE(node.port, node.kEmpty);
     CHECK(node.hostname.size());
 
-    if (node.id == my_node_.id) {
-      return;
-    }
     // worker doesn't need to connect to the other workers. same for server
     if ((node.role == my_node_.role) && (node.id != my_node_.id)) {
-      return;
-    }
-    if (node.role == Node::SCHEDULER && dataPlane) {
       return;
     }
 
@@ -316,8 +310,34 @@ class RDMAVan : public Van {
   }
 
   void Connect(const Node& node) override {
+    if (node.id == my_node_.id) {
+      return;
+    }
     Connect2Node(node, false);
-    Connect2Node(node, true);
+    if (my_node_.role != Node::SCHEDULER) {
+      Connect2Node(node, true);
+    }
+  }
+
+  Endpoint* FindIncomingEndpoint(int remote_id, bool data_plane) {
+    std::lock_guard<std::mutex> lk(incoming_mu_);
+    for (const auto& endpoint_holder : incoming_) {
+      Endpoint* endpoint = endpoint_holder.get();
+      if (endpoint->node_id != remote_id) {
+        continue;
+      }
+      if (endpoint->isDataPlane != data_plane) {
+        continue;
+      }
+      if (endpoint->status != Endpoint::CONNECTED) {
+        continue;
+      }
+      if (!endpoint->GetTransport()) {
+        continue;
+      }
+      return endpoint;
+    }
+    return nullptr;
   }
   // void Connect(const Node &node) override {
   //   PS_VLOG(1) << "Connecting to Node " << node.id
@@ -425,15 +445,31 @@ class RDMAVan : public Van {
     bool is_pushpull = IsValidPushpull(msg);
 
     endpoints_mu_.lock();
-    CHECK_NE(endpoints_.find(remote_id), endpoints_.end());
-    Endpoint* endpoint = endpoints_[remote_id].get();
+    Endpoint* endpoint = nullptr;
+    auto endpoint_it = endpoints_.find(remote_id);
+    if (endpoint_it != endpoints_.end()) {
+      endpoint = endpoint_it->second.get();
+    }
     Endpoint* dataEndpoint = nullptr;
     if (is_pushpull) {
       auto data_it = data_endpoints_.find(remote_id);
-      CHECK_NE(data_it, data_endpoints_.end());
-      dataEndpoint = data_it->second.get();
+      if (data_it != data_endpoints_.end()) {
+        dataEndpoint = data_it->second.get();
+      }
     }
     endpoints_mu_.unlock();
+
+    if (endpoint == nullptr) {
+      endpoint = FindIncomingEndpoint(remote_id, false);
+    }
+    CHECK(endpoint != nullptr) << "Control endpoint not ready for remote_id="
+                               << remote_id << ", local_id=" << my_node_.id;
+    if (is_pushpull && dataEndpoint == nullptr) {
+      dataEndpoint = FindIncomingEndpoint(remote_id, true);
+    }
+    CHECK(!is_pushpull || dataEndpoint != nullptr)
+        << "Data endpoint not ready for remote_id=" << remote_id
+        << ", local_id=" << my_node_.id;
 
     int meta_len = GetPackMetaLen(msg.meta);
     size_t data_len = msg.meta.data_size;

@@ -581,8 +581,10 @@ void Van::Start(int customer_id, bool standalone) {
     PS_VLOG(1) << "Bind to " << my_node_.DebugString();
     CHECK_NE(my_node_.port, -1) << "bind failed";
 
-    // connect to the scheduler
-    Connect(scheduler_);
+    // The scheduler does not need a loopback RDMA connection to itself.
+    if (!is_scheduler_) {
+      Connect(scheduler_);
+    }
 
     // for debug use
     if (Environment::Get()->find("PS_DROP_MSG")) {
@@ -670,6 +672,27 @@ void Van::RequestLocalStop() {
 }
 
 int Van::Send(Message &msg) {
+  if (msg.meta.recver == my_node_.id && !msg.meta.control.empty()) {
+    if (msg.meta.sender == Meta::kEmpty) {
+      msg.meta.sender = my_node_.id;
+    }
+
+    int send_bytes = GetPackMetaLen(msg.meta) + msg.meta.data_size;
+    const auto &ctrl = msg.meta.control;
+    if (ctrl.cmd == Control::BARRIER) {
+      ProcessBarrierCommand(&msg);
+    } else if (ctrl.cmd == Control::INSTANCE_BARRIER) {
+      ProcessInstanceBarrierCommand(&msg);
+    } else if (ctrl.cmd == Control::TERMINATE) {
+      ProcessTerminateCommand();
+    } else {
+      CHECK(false) << "Unsupported local control message " << msg.DebugString();
+    }
+
+    send_bytes_ += send_bytes;
+    return send_bytes;
+  }
+
   int send_bytes = SendMsg(msg);
   CHECK_NE(send_bytes, -1) << this->GetType() << " sent -1 bytes";
   send_bytes_ += send_bytes;
