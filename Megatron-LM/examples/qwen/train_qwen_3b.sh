@@ -67,7 +67,7 @@ detect_ip_from_iface() {
     ip -4 -o addr show dev "${iface}" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1
 }
 
-export DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-2}
+export DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-NUM_NODES}
 export NCCL_IB_HCA=${NCCL_IB_HCA:-mlx5_1}
 PRIMARY_HCA=$(extract_primary_hca)
 AUTO_DMLC_INTERFACE=$(detect_iface_from_hca "${PRIMARY_HCA}")
@@ -168,7 +168,7 @@ PP_SIZE=${PP_SIZE:-1}
 MICRO_BATCH_SIZE=${MICRO_BATCH_SIZE:-1}
 GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-8}
 
-NUM_LAYERS=${NUM_LAYERS:-24}
+NUM_LAYERS=${NUM_LAYERS:-28}
 HIDDEN_SIZE=${HIDDEN_SIZE:-2048}
 NUM_HEADS=${NUM_HEADS:-16}
 FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE:-11008}

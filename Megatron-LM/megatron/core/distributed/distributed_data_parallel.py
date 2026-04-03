@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from typing import Optional
 
 import torch
+import byteps.torch as bps
 
 from .. import parallel_state
 from ..config_logger import has_config_logger_enabled, log_config_to_disk
@@ -307,6 +308,23 @@ class DistributedDataParallel(_BaseDataParallel):
 
                 gradient_scaling_factor = 1.0 / data_parallel_world_size
                 expert_gradient_scaling_factor = 1.0 / data_parallel_world_size
+
+        if self.ddp_config.use_dpu_reduce and not self.ddp_config.use_distributed_optimizer:
+            world_size = torch.distributed.get_world_size()
+            if self.intra_dp_cp_group.size() != world_size:
+                raise NotImplementedError(
+                    "BytePS DPU grad reduce currently only supports the case where the "
+                    "data-parallel group spans the full torch.distributed world. "
+                    "Current implementation does not map Megatron DP subgroups to BytePS "
+                    "subgroups, so enabling it with TP/PP/CP-sharded worlds would "
+                    "incorrectly reduce across non-DP ranks."
+                )
+            if bps.size() != self.intra_dp_cp_group.size():
+                raise RuntimeError(
+                    "BytePS world size does not match Megatron data-parallel size: "
+                    f"byteps.size()={bps.size()} vs dp_size={self.intra_dp_cp_group.size()}. "
+                    "Check DMLC_NUM_WORKER / BYTEPS_LOCAL_SIZE / launcher configuration."
+                )
 
         # Allocate the param+grad buffers for dense params' grads.
         self.buffers, self.bucket_groups = _allocate_buffers_for_parameters(

@@ -85,9 +85,11 @@ export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-${NCCL_SOCKET_IFNAME}}
 GPUS_PER_NODE=${GPUS_PER_NODE:-1}  # 每台机器上的 GPU 数
 NUM_NODES=${NUM_NODES:-2}
 
+WORLD_SIZE=$((GPUS_PER_NODE * NUM_NODES))
+
 MASTER_PORT=${MASTER_PORT:-19002}
 DMLC_PS_ROOT_PORT=${DMLC_PS_ROOT_PORT:-9010}
-DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-2}
+DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-$WORLD_SIZE}
 
 # Set to the current node IP reachable by all other nodes.
 export DMLC_NODE_HOST=${DMLC_NODE_HOST:-${LOCAL_DETECTED_IP}}
@@ -115,8 +117,6 @@ export DMLC_PS_ROOT_URI="${DMLC_PS_ROOT_URI_VALUE}"
 
 # Keep device visibility ordered and let torchrun bind local rank to GPU index.
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1}   # 多机单卡，必要时可从外部覆盖
-
-WORLD_SIZE=$((GPUS_PER_NODE * NUM_NODES))
 
 ############################################
 # BytePS TP-only requirements

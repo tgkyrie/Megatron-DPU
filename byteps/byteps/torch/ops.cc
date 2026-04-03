@@ -51,11 +51,11 @@ int GetDeviceID(const ::torch::Tensor& tensor) {
 
 }  // namespace
 
-void StartTask(::torch::Tensor tensor, ::torch::Tensor output, int average,
+void StartTask(::torch::Tensor tensor, ::torch::Tensor output,
+               std::shared_ptr<ReadyEvent> ready_event, int average,
                const std::string tensor_name, int version, int priority, int handle) {
 
   auto device = GetDeviceID(tensor);
-  auto ready_event = RecordReadyEvent(device);
   auto byteps_input = std::make_shared<TorchTensor>(tensor);
   auto byteps_output = std::make_shared<TorchTensor>(output);
   size_t size = byteps_input->size();
@@ -103,10 +103,24 @@ int DoPushPull(::torch::Tensor tensor, ::torch::Tensor output, int average,
   auto handle = handle_manager.AllocateHandle();
   std::string tensor_name = GetOpName("byteps", name.c_str(), 0);
   auto& context = common::GetContextFromName(tensor_name);
+  auto ready_event = RecordReadyEvent(GetDeviceID(tensor));
   if (context.initialized) {
-    StartTask(tensor, output, average, tensor_name, version, priority, handle);
+    StartTask(
+        tensor, output, ready_event, average, tensor_name, version, priority, handle);
   } else {
-    std::thread t(StartTask, tensor, output, average, tensor_name, version, priority, handle);
+    // Record the CUDA readiness event on the caller's current stream.
+    // If this is done inside the detached init thread, the first invocation for a tensor name
+    // may capture that thread's default stream instead of the stream that produced the tensor.
+    std::thread t(
+        StartTask,
+        tensor,
+        output,
+        ready_event,
+        average,
+        tensor_name,
+        version,
+        priority,
+        handle);
     t.detach();
   }
   return handle;
@@ -144,13 +158,23 @@ pybind11::tuple DoPushPullGroupSync(::torch::Tensor tensor,
   auto handle = handle_manager.AllocateHandle();
   std::string tensor_name = GetOpName("byteps", name.c_str(), 0);
   auto& context = common::GetContextFromName(tensor_name);
+  auto ready_event = RecordReadyEvent(GetDeviceID(tensor));
   int curr_count;
 
   if (context.initialized) {
-    StartTask(tensor, output, average, tensor_name, version, priority, handle);
+    StartTask(
+        tensor, output, ready_event, average, tensor_name, version, priority, handle);
   } else {
-    std::thread t(StartTask, tensor, output, average, tensor_name, version,
-                  priority, handle);
+    std::thread t(
+        StartTask,
+        tensor,
+        output,
+        ready_event,
+        average,
+        tensor_name,
+        version,
+        priority,
+        handle);
     t.detach();
   }
 
