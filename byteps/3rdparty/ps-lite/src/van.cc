@@ -637,13 +637,7 @@ void Van::Start(int customer_id, bool standalone) {
 
 void Van::Stop() {
   // stop threads
-  Message exit;
-  exit.meta.control.cmd = Control::TERMINATE;
-  exit.meta.recver = my_node_.id;
-  // only customer 0 would call this method
-  exit.meta.customer_id = 0;
-  int ret = SendMsg(exit);
-  CHECK_NE(ret, -1);
+  RequestLocalStop();
   receiver_thread_->join();
   init_stage = 0;
   if (!is_scheduler_) heartbeat_thread_->join();
@@ -663,6 +657,16 @@ void Van::Stop() {
     fout_.close();
   }
 #endif
+}
+
+void Van::RequestLocalStop() {
+  Message exit;
+  exit.meta.control.cmd = Control::TERMINATE;
+  exit.meta.recver = my_node_.id;
+  // only customer 0 would call this method
+  exit.meta.customer_id = 0;
+  int ret = SendMsg(exit);
+  CHECK_NE(ret, -1);
 }
 
 int Van::Send(Message &msg) {

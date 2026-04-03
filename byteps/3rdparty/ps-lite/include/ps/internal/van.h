@@ -165,6 +165,13 @@ class Van {
 
  protected:
   /**
+   * \brief request the receiving thread to exit during local shutdown.
+   * Backends that do not rely on a self-connection can override this to
+   * provide a local wakeup path.
+   */
+  virtual void RequestLocalStop();
+
+  /**
    * \brief get the length of pack meta
    */
   int GetPackMetaLen(const Meta &meta);

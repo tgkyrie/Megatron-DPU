@@ -43,6 +43,11 @@ class RDMAVan : public Van {
   }
 
  protected:
+  void RequestLocalStop() override {
+    should_stop_ = true;
+    recv_buffers_.Push(std::make_tuple(nullptr, nullptr));
+  }
+
   void Start(int customer_id, bool standalone) override {
     start_mu_.lock();
     should_stop_ = false;
@@ -103,7 +108,6 @@ class RDMAVan : public Van {
     PS_VLOG(1) << my_node_.ShortDebugString() << " is stopping";
     Van::Stop();
 
-    should_stop_ = true;
     CHECK(should_stop_);
 
     printf("printing duration\n");
@@ -111,12 +115,16 @@ class RDMAVan : public Van {
       printf("duration: %lld\n", dur);
     }
     PS_VLOG(1) << "Stopping cq_polling_thread_.";
-    cq_polling_thread_->join();
-    cq_polling_thread_.reset();
+    if (cq_polling_thread_) {
+      cq_polling_thread_->join();
+      cq_polling_thread_.reset();
+    }
 
     PS_VLOG(1) << "Stopping cm_event_polling_thread_.";
-    cm_event_polling_thread_->join();
-    cm_event_polling_thread_.reset();
+    if (cm_event_polling_thread_) {
+      cm_event_polling_thread_->join();
+      cm_event_polling_thread_.reset();
+    }
 
     PS_VLOG(1) << "Clearing memory allocator.";
     mem_allocator_.reset();
@@ -208,13 +216,16 @@ class RDMAVan : public Van {
     CHECK_NE(node.port, node.kEmpty);
     CHECK(node.hostname.size());
 
+    if (node.id == my_node_.id) {
+      return;
+    }
     // worker doesn't need to connect to the other workers. same for server
     if ((node.role == my_node_.role) && (node.id != my_node_.id)) {
       return;
     }
-    // if(node.role==Node::SCHEDULER && dataPlane){
-    //   return;
-    // }
+    if (node.role == Node::SCHEDULER && dataPlane) {
+      return;
+    }
 
     if (node.id != Node::kEmpty) {
       endpoints_mu_.lock();
@@ -411,11 +422,17 @@ class RDMAVan : public Van {
   int SendMsg(Message& msg) override {
     int remote_id = msg.meta.recver;
     CHECK_NE(remote_id, Meta::kEmpty);
+    bool is_pushpull = IsValidPushpull(msg);
 
     endpoints_mu_.lock();
     CHECK_NE(endpoints_.find(remote_id), endpoints_.end());
     Endpoint* endpoint = endpoints_[remote_id].get();
-    Endpoint* dataEndpoint = data_endpoints_[remote_id].get();
+    Endpoint* dataEndpoint = nullptr;
+    if (is_pushpull) {
+      auto data_it = data_endpoints_.find(remote_id);
+      CHECK_NE(data_it, data_endpoints_.end());
+      dataEndpoint = data_it->second.get();
+    }
     endpoints_mu_.unlock();
 
     int meta_len = GetPackMetaLen(msg.meta);
@@ -426,15 +443,18 @@ class RDMAVan : public Van {
     RegisterMemory(msg);
 
     // pack meta info
-    if (IsValidPushpull(msg)) {
+    if (is_pushpull) {
       AddMeta(msg);
     }
 
     auto trans = CHECK_NOTNULL(endpoint->GetTransport());
-    auto dataTrans = CHECK_NOTNULL(dataEndpoint->GetTransport());
+    std::shared_ptr<Transport> dataTrans;
+    if (is_pushpull) {
+      dataTrans = CHECK_NOTNULL(dataEndpoint->GetTransport());
+    }
 
     // start rendezvous if no remote info
-    if (!IsValidPushpull(msg)) {
+    if (!is_pushpull) {
       MessageBuffer* msg_buf = PrepareNewMsgBuf(msg);
       StoreMsgBuf(msg_buf, msg);
       trans->SendRendezvousBegin(msg, msg_buf);
@@ -500,6 +520,13 @@ class RDMAVan : public Van {
 
     Endpoint* endpoint = std::get<Endpoint*>(notification);
     BufferContext* buffer_ctx = std::get<BufferContext*>(notification);
+    if (endpoint == nullptr || buffer_ctx == nullptr) {
+      msg->meta = Meta();
+      msg->meta.recver = my_node_.id;
+      msg->meta.sender = my_node_.id;
+      msg->meta.control.cmd = Control::TERMINATE;
+      return 0;
+    }
 
     msg->meta.recver = my_node_.id;
     msg->meta.sender = endpoint->node_id;
