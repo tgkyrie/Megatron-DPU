@@ -22,12 +22,32 @@ export BYTEPS_SCHEDULING_CREDIT=${BYTEPS_SCHEDULING_CREDIT:-0}
 
 export DMLC_USE_GDR=${DMLC_USE_GDR:-1}  # GPU Direct RDMA，默认关闭
 
-export DMLC_INTERFACE=${DMLC_INTERFACE:-ens39f1np1}
+extract_primary_hca() {
+  local hca="${NCCL_IB_HCA:-}"
+  hca="${hca%%,*}"
+  hca="${hca%%:*}"
+  hca="${hca#^}"
+  hca="${hca#=}"
+  printf '%s' "${hca}"
+}
+
+detect_iface_from_hca() {
+  local hca="$1"
+  if [[ -z "${hca}" ]]; then
+    return
+  fi
+  ls "/sys/class/infiniband/${hca}/device/net" 2>/dev/null | head -n1
+}
 
 detect_ip() {
   ip -4 addr show dev "${DMLC_INTERFACE}" 2>/dev/null \
     | awk '/inet / {print $2}' | cut -d/ -f1 | head -n1
 }
+
+export NCCL_IB_HCA=${NCCL_IB_HCA:-mlx5_1}
+PRIMARY_HCA=$(extract_primary_hca)
+AUTO_DMLC_INTERFACE=$(detect_iface_from_hca "${PRIMARY_HCA}")
+export DMLC_INTERFACE=${DMLC_INTERFACE:-${AUTO_DMLC_INTERFACE:-ens39f1np1}}
 
 # scheduler 地址：默认 192.168.1.10:9010
 export DMLC_PS_ROOT_URI=${DMLC_PS_ROOT_URI:-192.168.1.10}
