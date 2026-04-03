@@ -67,7 +67,6 @@ detect_ip_from_iface() {
     ip -4 -o addr show dev "${iface}" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1
 }
 
-export DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-NUM_NODES}
 export NCCL_IB_HCA=${NCCL_IB_HCA:-mlx5_1}
 PRIMARY_HCA=$(extract_primary_hca)
 AUTO_DMLC_INTERFACE=$(detect_iface_from_hca "${PRIMARY_HCA}")
@@ -153,6 +152,7 @@ WORLD_SIZE=$((GPUS_PER_NODE * NUM_NODES))
 
 # BytePS: current DP script keeps one worker per host.
 export DMLC_NUM_WORKER=${DMLC_NUM_WORKER:-$NUM_NODES}
+export DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-$NUM_NODES}
 # BytePS: local processes per host.
 export BYTEPS_LOCAL_SIZE=${BYTEPS_LOCAL_SIZE:-$GPUS_PER_NODE}
 
@@ -166,9 +166,9 @@ CP_SIZE=${CP_SIZE:-1}
 PP_SIZE=${PP_SIZE:-1}
 
 MICRO_BATCH_SIZE=${MICRO_BATCH_SIZE:-1}
-GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-8}
+GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-$((MICRO_BATCH_SIZE * WORLD_SIZE))}
 
-NUM_LAYERS=${NUM_LAYERS:-28}
+NUM_LAYERS=${NUM_LAYERS:-32}
 HIDDEN_SIZE=${HIDDEN_SIZE:-2048}
 NUM_HEADS=${NUM_HEADS:-16}
 FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE:-11008}

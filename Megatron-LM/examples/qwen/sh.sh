@@ -1,21 +1,21 @@
 
 # scheduler
-DMLC_NUM_SERVER=8
-DMLC_NUM_WORKER=8
+export DMLC_NUM_WORKER=8
+export DMLC_NUM_SERVER=8
 
 # server
 export DMLC_NUM_WORKER=8
 export DMLC_NUM_SERVER=8
 
-export BYTEPS_RDMA_USE_SRQ=1  
+# export BYTEPS_RDMA_USE_SRQ=1  
 
 
 # worker
 export NUM_NODES=8
 export NODE_RANK=X
-export DMLC_NUM_SERVER=$NUM_NODES
+# export DMLC_NUM_SERVER=$NUM_NODES
 
-export BYTEPS_RDMA_USE_SRQ=1
+# export BYTEPS_RDMA_USE_SRQ=1
 # 和如下差不多，选一个就行，应该
 # export BYTEPS_RDMA_USE_SRQ=0
 # export BYTEPS_RDMA_CTRL_RX_DEPTH=64
@@ -24,8 +24,3 @@ export BYTEPS_RDMA_USE_SRQ=1
 
 # 分片 或 4194304
 # export BYTEPS_PARTITION_BYTES=4194304
-
-# 模型
-export FFN_HIDDEN_SIZE=11008
-export SEQ_LENGTH=4096
-export NUM_LAYERS=28
