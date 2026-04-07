@@ -5,7 +5,7 @@ import torch
 from megatron.core.parallel_state import get_global_memory_buffer
 from megatron.core.utils import get_tensor_model_parallel_group_if_none, is_torch_min_version
 
-import byteps.torch as bps
+from megatron.core.distributed.byteps_collectives import byteps_allreduce
 
 from .utils import split_tensor_along_last_dim
 
@@ -43,23 +43,15 @@ def _bps_reduce(input_, group, name):
     if group.size() == 1:
         return input_
 
-    # Current BytePS TP prototype has no subgroup support yet, so it is only valid
-    # when the BytePS world exactly matches the TP group.
-    torch_world_size = torch.distributed.get_world_size()
-    assert group.size() == torch_world_size, (
-        "Current BytePS TP reduce prototype requires BytePS world == TP group "
-        f"(tp={group.size()}, world={torch_world_size})."
-    )
-
-    output_ = bps.push_pull(
+    return byteps_allreduce(
         input_,
+        group=group,
+        scope='tp',
+        logical_name=name,
         average=False,
-        name=name,
         version=0,
         priority=0,
     )
-
-    return output_
 
 
 def _split_along_last_dim(input_, group):

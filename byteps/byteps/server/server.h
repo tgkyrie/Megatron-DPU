@@ -37,7 +37,7 @@ namespace server {
 using namespace ps;
 
 enum class RequestType {
-  kDefaultPushPull, kRowSparsePushPull, kCompressedPushPull
+  kDefaultPushPull, kRowSparsePushPull, kCompressedPushPull, kGroupRegister
 };
 
 enum BytePSEngineOperation {
@@ -98,6 +98,8 @@ byteps::common::CpuReducer* bps_reducer_;
 std::mutex pullresp_mu_;
 std::unordered_map<uint64_t, ps::KVPairs<char> > push_response_map_;
 std::unordered_map<uint64_t, ps::KVPairs<char> > pull_response_map_;
+std::mutex expected_workers_mu_;
+std::unordered_map<uint64_t, int> expected_workers_by_key_;
 
 // push & pull flag
 std::vector<std::mutex> flag_mu_;

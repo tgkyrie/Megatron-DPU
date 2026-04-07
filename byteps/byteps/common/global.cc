@@ -432,6 +432,31 @@ bool BytePSGlobal::IsTensorDeclared(const std::string& name) {
   return true;
 }
 
+void BytePSGlobal::RegisterTensorExpectedWorkers(
+    const std::string& name, int expected_workers) {
+  std::lock_guard<std::mutex> lock(_context_mutex);
+  BPS_CHECK(_name_to_cxt.find(name) != _name_to_cxt.end())
+      << name << " is not initialized";
+  BPS_CHECK_GT(expected_workers, 0)
+      << "expected_workers must be > 0 for " << name;
+
+  auto& context = _name_to_cxt[name];
+  if (context.expected_workers == -1) {
+    context.expected_workers = expected_workers;
+    return;
+  }
+  BPS_CHECK_EQ(context.expected_workers, expected_workers)
+      << "Tensor " << name << " was declared with inconsistent expected_workers: "
+      << context.expected_workers << " vs " << expected_workers;
+}
+
+int BytePSGlobal::GetTensorExpectedWorkers(const std::string& name) {
+  std::lock_guard<std::mutex> lock(_context_mutex);
+  BPS_CHECK(_name_to_cxt.find(name) != _name_to_cxt.end())
+      << name << " is not initialized";
+  return _name_to_cxt[name].expected_workers;
+}
+
 void BytePSGlobal::ReDeclareTensor() {
   for (auto name : _declared_tensors) {
     BPS_LOG(DEBUG) << "Redeclare tensor " << name;

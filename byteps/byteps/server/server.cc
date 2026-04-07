@@ -15,6 +15,8 @@
 
 #include "server.h"
 
+#include <cstring>
+
 #include "../common/compressor/utils.h"
 #include "queue.h"
 
@@ -67,6 +69,27 @@ BytePSArray* GetStore(uint64_t key) {
 UpdateBuf* GetUpdateBuf(uint64_t key) {
   std::lock_guard<std::mutex> lock(update_buf_mu_);
   return &update_buf_[key];
+}
+
+void RegisterExpectedWorkers(uint64_t key, int expected_workers) {
+  std::lock_guard<std::mutex> lock(expected_workers_mu_);
+  auto it = expected_workers_by_key_.find(key);
+  if (it == expected_workers_by_key_.end()) {
+    expected_workers_by_key_[key] = expected_workers;
+    return;
+  }
+  CHECK_EQ(it->second, expected_workers)
+      << "Key " << key << " registered with inconsistent expected_workers: "
+      << it->second << " vs " << expected_workers;
+}
+
+int GetExpectedWorkers(uint64_t key) {
+  std::lock_guard<std::mutex> lock(expected_workers_mu_);
+  auto it = expected_workers_by_key_.find(key);
+  if (it == expected_workers_by_key_.end()) {
+    return ps::NumWorkers();
+  }
+  return it->second;
 }
 
 void SendPushResponse(uint64_t key, const ps::KVMeta& req,
@@ -212,7 +235,7 @@ void BytePSServerEngineThread(int i) {
           } else {
             ++it;
           }
-          if (pull_cnt_[i][msg.key] == (size_t)ps::NumWorkers()) {
+          if (pull_cnt_[i][msg.key] == (size_t)GetExpectedWorkers(msg.key)) {
             is_push_finished_[i][msg.key] = false;
             pull_cnt_[i][msg.key] = 0;
             seen_sender_[i][msg.key].clear();
@@ -282,6 +305,19 @@ void BytePSHandler(const ps::KVMeta& req_meta,
   }
   uint64_t key = DecodeKey(req_data.keys[0]);
 
+  if (type.requestType == RequestType::kGroupRegister) {
+    CHECK(req_meta.push) << "group registration must be a push request";
+    CHECK_EQ(req_data.lens.size(), (size_t)1);
+    CHECK_EQ(req_data.lens[0], (int)sizeof(int));
+    CHECK_EQ(req_data.vals.size(), (size_t)sizeof(int));
+    int expected_workers = 0;
+    std::memcpy(&expected_workers, req_data.vals.data(), sizeof(int));
+    CHECK_GT(expected_workers, 0) << "invalid expected_workers for key=" << key;
+    RegisterExpectedWorkers(key, expected_workers);
+    SendPushResponse(key, req_meta, server);
+    return;
+  }
+
   // register compressor
   if (type.requestType == RequestType::kCompressedPushPull) {
     if (compressor_map_.find(key) == compressor_map_.end()) {
@@ -305,7 +341,7 @@ void BytePSHandler(const ps::KVMeta& req_meta,
     auto updates = GetUpdateBuf(key);
     updates->request.push_back(req_meta);
     // should send response after collecting all init push
-    if (updates->request.size() < (size_t)ps::NumWorkers()) return;
+    if (updates->request.size() < (size_t)GetExpectedWorkers(key)) return;
 
     for (const auto& req : updates->request) {
       SendPushResponse(key, req, server);
@@ -330,7 +366,7 @@ void BytePSHandler(const ps::KVMeta& req_meta,
       // buffer the request meta
       updates->request.push_back(req_meta);
       // should send response after collecting all init push
-      if (updates->request.size() < (size_t)ps::NumWorkers()) return;
+      if (updates->request.size() < (size_t)GetExpectedWorkers(key)) return;
       if (log_key_info_) {
         LOG(INFO) << "Collected all " << updates->request.size()
                   << " requests for key=" << key
@@ -405,7 +441,7 @@ void BytePSHandler(const ps::KVMeta& req_meta,
       // add a worker information (request.size() is the # workers received)
       updates->request.push_back(req_meta);
       SendPushResponse(key, req_meta, server);
-      if (sync_mode_ && updates->request.size() == (size_t)ps::NumWorkers()) {
+      if (sync_mode_ && updates->request.size() == (size_t)GetExpectedWorkers(key)) {
         auto stored = GetStore(key);
         auto& update = updates->merged;
         if (debug_mode_ && (debug_key_ == key)) {
@@ -456,7 +492,7 @@ void BytePSHandler(const ps::KVMeta& req_meta,
         pull_cnt_[tid][key] += 1;
         seen_sender_[tid][key].insert(req_meta.sender);
 
-        if (pull_cnt_[tid][key] == (size_t)ps::NumWorkers()) {
+        if (pull_cnt_[tid][key] == (size_t)GetExpectedWorkers(key)) {
           is_push_finished_[tid][key] = false;
           pull_cnt_[tid][key] = 0;
           seen_sender_[tid][key].clear();

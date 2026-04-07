@@ -76,6 +76,8 @@ void InitTensor(BPSContext &context, size_t size, int dtype, void *cpubuff);
 // Only call these in Framework plugins for the best performance
 bool IsTensorDeclared(const std::string &name);
 
+void RegisterTensorExpectedWorkers(const std::string& name, int expected_workers);
+
 void RegisterCompressor(const std::string &name,
                         std::unordered_map<std::string, std::string> &kwargs);
 

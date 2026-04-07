@@ -179,6 +179,8 @@ typedef struct BytePSContext {
   std::mutex init_mutex;
   // tensor name
   std::string tensor_name;
+  // expected participants for this tensor collective. -1 means fallback to world size.
+  int expected_workers = -1;
   // using ps::Key = uint64_t
   uint64_t declared_key;
   // the actual keys being used
@@ -267,7 +269,8 @@ using TensorTable = std::unordered_map<std::string, TensorTableEntry>;
 enum class RequestType {
   kDefaultPushPull,
   kRowSparsePushPull,
-  kCompressedPushPull
+  kCompressedPushPull,
+  kGroupRegister
 };
 
 int GetCommandType(RequestType requestType, int d);

@@ -12,8 +12,9 @@ from typing import Dict, List, Optional
 import torch
 from torch.distributed import _coalescing_manager
 
-import byteps.torch as bps
 from byteps.torch import ops as bps_ops
+
+from .byteps_collectives import byteps_allreduce_async_inplace, byteps_allreduce_inplace
 
 import megatron.core.nccl_allocator as nccl_allocator
 from megatron.core import parallel_state
@@ -399,12 +400,12 @@ class _ParamAndGradBucketGroup:
             if async_op:
                 handles = []
                 for _, bucket in enumerate(self.buckets):
-                    # 为 BytePS 构造一个稳定且全局唯一的 name，确保所有 rank 一致
-                    name = f"dp_bucket_{bucket.bucket_id}"
-                    handle = bps_ops.push_pull_async_inplace(
+                    handle = byteps_allreduce_async_inplace(
                         bucket.grad_data,
+                        group=communication_group,
+                        scope='dp',
+                        logical_name=f"bucket_{bucket.bucket_id}",
                         average=byteps_average,
-                        name=name,
                         version=0,
                         priority=0,
                     )
@@ -413,12 +414,12 @@ class _ParamAndGradBucketGroup:
                 return
             else:
                 for _, bucket in enumerate(self.buckets):
-                    # 为 BytePS 构造一个稳定且全局唯一的 name，确保所有 rank 一致
-                    name = f"dp_bucket_{bucket.bucket_id}"
-                    bps.push_pull_inplace(
+                    byteps_allreduce_inplace(
                         bucket.grad_data,
+                        group=communication_group,
+                        scope='dp',
+                        logical_name=f"bucket_{bucket.bucket_id}",
                         average=byteps_average,
-                        name=name,
                         version=0,
                         priority=0,
                     )

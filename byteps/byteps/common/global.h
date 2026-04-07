@@ -96,6 +96,8 @@ class BytePSGlobal {
 
   static void RegisterCompressor(const std::string& name, 
                                  std::unordered_map<std::string, std::string>& kwargs);
+  static void RegisterTensorExpectedWorkers(const std::string& name, int expected_workers);
+  static int GetTensorExpectedWorkers(const std::string& name);
   static ps::Key GetKeyFromName(const std::string& name);
   static BPSContext& GetContextFromName(const std::string& name);
   static uint32_t GetTensorCount();

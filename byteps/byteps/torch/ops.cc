@@ -140,6 +140,14 @@ void DeclareTensor(const std::string& name) {
   common::IsTensorDeclared(tensor_name);
 }
 
+void RegisterTensorGroup(const std::string& name, int expected_workers) {
+  std::string tensor_name = GetOpName("byteps", name.c_str(), 0);
+  common::IsTensorDeclared(tensor_name);
+  if (expected_workers > 0) {
+    common::RegisterTensorExpectedWorkers(tensor_name, expected_workers);
+  }
+}
+
 void WaitAndClear(int handle) {
   while (!handle_manager.PollHandle(handle)) {
     // std::this_thread::sleep_for(std::chrono::milliseconds(1)); 
@@ -228,6 +236,7 @@ PYBIND11_MODULE(c_lib, m) {
   m.def("byteps_torch_poll", &PollHandle);
   m.def("byteps_torch_wait_and_clear", &WaitAndClear);
   m.def("byteps_torch_declare_tensor", &DeclareTensor);
+  m.def("byteps_torch_register_tensor_group", &RegisterTensorGroup);
 }
 
 }  // namespace torch

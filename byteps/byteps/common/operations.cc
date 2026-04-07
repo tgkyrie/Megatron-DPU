@@ -593,6 +593,20 @@ void InitTensor(BPSContext &context, size_t size, int dtype, void *cpubuff) {
   }
   BPS_LOG(TRACE) << name << ": open shared memory size " << aligned_size;
 
+  if (BytePSGlobal::IsDistributed() && BytePSGlobal::IsRootDevice()) {
+    auto ps = BytePSGlobal::GetOrInitPS();
+    auto expected_workers = context.expected_workers > 0
+                                ? context.expected_workers
+                                : BytePSGlobal::GetNumWorker();
+    for (auto key : key_list) {
+      auto &kv = BytePSGlobal::EncodeDefaultKey(key, sizeof(int));
+      auto *raw = reinterpret_cast<char*>(&expected_workers);
+      ps::SArray<char> vals(raw, sizeof(int), false);
+      int cmd = GetCommandType(RequestType::kGroupRegister, BYTEPS_INT32);
+      ps->Wait(ps->ZPush(kv.keys, vals, kv.lens, cmd));
+    }
+  }
+
   // Init tensors with BytePS server
   char *data = const_cast<char *>(static_cast<const char *>(context.cpubuff));
   accumulated = 0;
@@ -659,6 +673,10 @@ BPSContext &GetContextFromName(const std::string &name) {
 
 bool IsTensorDeclared(const std::string &name) {
   return BytePSGlobal::IsTensorDeclared(name);
+}
+
+void RegisterTensorExpectedWorkers(const std::string& name, int expected_workers) {
+  BytePSGlobal::RegisterTensorExpectedWorkers(name, expected_workers);
 }
 
 void RegisterCompressor(const std::string &name,

@@ -211,7 +211,10 @@ def poll(handle):
     return c_lib.byteps_torch_poll(handle) != 0
 
 
-def declare(name):
+def declare(name, expected_workers=None):
+    if expected_workers is not None:
+        c_lib.byteps_torch_register_tensor_group(name.encode(), int(expected_workers))
+        return 0
     c_lib.byteps_torch_declare_tensor(name.encode())
     return 0
 
