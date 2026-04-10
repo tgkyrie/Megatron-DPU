@@ -5,8 +5,6 @@ import torch
 from megatron.core.parallel_state import get_global_memory_buffer
 from megatron.core.utils import get_tensor_model_parallel_group_if_none, is_torch_min_version
 
-from megatron.core.distributed.byteps_collectives import byteps_allreduce
-
 from .utils import split_tensor_along_last_dim
 
 try:
@@ -42,6 +40,12 @@ def _bps_reduce(input_, group, name):
     # Bypass the function if we are using only 1 GPU.
     if group.size() == 1:
         return input_
+
+    # Lazy import to avoid circular import:
+    # mappings -> distributed.byteps_collectives -> distributed.__init__ ->
+    # finalize_model_grads -> pipeline_parallel -> schedules ->
+    # transformer.moe.router -> tensor_parallel (circular)
+    from megatron.core.distributed.byteps_collectives import byteps_allreduce
 
     return byteps_allreduce(
         input_,

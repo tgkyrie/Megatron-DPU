@@ -90,9 +90,8 @@ class RDMAVan : public Van {
 
       auto start_depth = start_depth_env ? atoi(start_depth_env) : 128;
       auto rx_depth = rx_depth_env ? atoi(rx_depth_env) : 2048;
-      auto control_rx_depth = ctrl_rx_depth_env
-                                  ? atoi(ctrl_rx_depth_env)
-                                  : std::min(rx_depth, 128);
+      auto control_rx_depth =
+          ctrl_rx_depth_env ? atoi(ctrl_rx_depth_env) : std::min(rx_depth, 128);
       auto reply_depth = std::max(rx_depth, control_rx_depth);
 
       CHECK_GE(kMaxConcurrentWorkRequest, start_depth + reply_depth + rx_depth)
@@ -314,7 +313,11 @@ class RDMAVan : public Van {
       return;
     }
     Connect2Node(node, false);
-    if (my_node_.role != Node::SCHEDULER) {
+
+    // Only create data plane connections between workers and servers
+    // Scheduler should only use control plane connections
+    // Servers/workers should not create data plane connections to scheduler
+    if (my_node_.role == Node::WORKER && node.role == Node::SERVER) {
       Connect2Node(node, true);
     }
   }
@@ -462,8 +465,9 @@ class RDMAVan : public Van {
     if (endpoint == nullptr) {
       endpoint = FindIncomingEndpoint(remote_id, false);
     }
-    CHECK(endpoint != nullptr) << "Control endpoint not ready for remote_id="
-                               << remote_id << ", local_id=" << my_node_.id;
+    CHECK(endpoint != nullptr)
+        << "Control endpoint not ready for remote_id=" << remote_id
+        << ", local_id=" << my_node_.id;
     if (is_pushpull && dataEndpoint == nullptr) {
       dataEndpoint = FindIncomingEndpoint(remote_id, true);
     }
@@ -682,6 +686,22 @@ class RDMAVan : public Van {
     std::lock_guard<std::mutex> lk(addr_mu_);
     if (is_push && (push_addr_.find(key) != push_addr_.end()) &&
         (push_addr_[key].find(recver) != push_addr_[key].end())) {
+      // Check if the cached MR is large enough for the current push data
+      // This handles the case where a small push (e.g., kGroupRegister with 4
+      // bytes) is followed by a large push (e.g., kDefaultPushPull with MB of
+      // data) for the same key, which would otherwise cause a size mismatch
+      // crash.
+      auto& addr_tuple = push_addr_[key][recver];
+      MessageBuffer* cached_msg_buf = std::get<3>(addr_tuple);
+      if (cached_msg_buf->mrs.size() > 0 && msg.data.size() > 1) {
+        size_t cached_mr_size = cached_msg_buf->mrs[0].second;
+        size_t current_data_size = msg.data[1].size();
+        if (current_data_size > cached_mr_size) {
+          // Cached MR is too small, invalidate and force re-rendezvous
+          push_addr_[key].erase(recver);
+          return false;
+        }
+      }
       return true;
     }
     if (!is_push && (pull_addr_.find(key) != pull_addr_.end()) &&
@@ -1111,7 +1131,8 @@ class RDMAVan : public Van {
     std::pair<std::unordered_set<std::unique_ptr<Endpoint>>::iterator, bool> r;
     {
       std::lock_guard<std::mutex> incoming_lk(incoming_mu_);
-      r = incoming_.emplace(std::make_unique<Endpoint>(remote_ctx->isDataPlane));
+      r = incoming_.emplace(
+          std::make_unique<Endpoint>(remote_ctx->isDataPlane));
     }
     Endpoint* endpoint = r.first->get();
     endpoint->SetNodeID(remote_ctx->node);

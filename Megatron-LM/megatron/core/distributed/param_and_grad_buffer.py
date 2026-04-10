@@ -389,10 +389,6 @@ class _ParamAndGradBucketGroup:
         if (not self.ddp_config.use_distributed_optimizer
                 and getattr(self.ddp_config, "use_dpu_reduce", False)):
 
-            # 先不支持 overlap，强行同步
-            # assert not self.ddp_config.overlap_grad_reduce, \
-            #     "暂不支持 BytePS + overlap_grad_reduce，请先关闭 overlap_grad_reduce"
-
             # 根据 average_in_collective 决定 BytePS 是做 SUM 还是 AVG
             # 注意：上面已经做过 gradient_scaling_factor *= ，这里要保持语义一致
             byteps_average = self.ddp_config.average_in_collective
