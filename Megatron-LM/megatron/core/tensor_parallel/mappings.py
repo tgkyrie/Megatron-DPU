@@ -45,9 +45,10 @@ def _bps_reduce(input_, group, name):
     # mappings -> distributed.byteps_collectives -> distributed.__init__ ->
     # finalize_model_grads -> pipeline_parallel -> schedules ->
     # transformer.moe.router -> tensor_parallel (circular)
-    from megatron.core.distributed.byteps_collectives import byteps_allreduce
+    from byteps.torch import ops as bps_ops
+    from megatron.core.distributed.byteps_collectives import byteps_allreduce_async_inplace
 
-    return byteps_allreduce(
+    handle = byteps_allreduce_async_inplace(
         input_,
         group=group,
         scope='tp',
@@ -56,6 +57,9 @@ def _bps_reduce(input_, group, name):
         version=0,
         priority=0,
     )
+    # Keep TP reduce semantics explicit: launch async collective and wait
+    # precisely at this upper-layer callsite.
+    return bps_ops.synchronize(handle)
 
 
 def _split_along_last_dim(input_, group):

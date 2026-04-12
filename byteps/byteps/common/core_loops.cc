@@ -594,13 +594,17 @@ bool RunGDRPushLoopOnce(){
       auto len = task->len;
 
       char *data;
-      // BPS_CHECK(task->cpubuff);
-      if(task->cpubuff){
+      if (task->device == CPU_DEVICE_ID) {
+        if (task->cpubuff) {
+          data =
+              const_cast<char *>(static_cast<const char *>(task->cpubuff) + offset);
+        } else {
+          data =
+              const_cast<char *>(static_cast<const char *>(tensor->data()) + offset);
+        }
+      } else {
         data =
-          const_cast<char *>(static_cast<const char *>(task->cpubuff) + offset);
-      }else{
-        data =
-           const_cast<char *>(static_cast<const char *> ( (char*)(tensor->data()) + offset ) );
+            const_cast<char *>(static_cast<const char *>(tensor->data()) + offset);
       }
       
 
@@ -635,20 +639,30 @@ bool RunGDRPullLoopOnce() {
     BPS_CHECK(BytePSGlobal::IsRootDevice())
         << "only root device should enter PULL loop";
     auto tensor=task->tensor;
+    auto output=task->output;
     // TODO: allow merging
     auto offset = task->offset;
     auto len = task->len;
     
     char *data;
-    if(task->cpubuff){
+    if (task->device == CPU_DEVICE_ID) {
+      if (task->cpubuff) {
+        data =
+            const_cast<char *>(static_cast<const char *>(task->cpubuff) + offset);
+      } else if (output) {
+        data =
+            const_cast<char *>(static_cast<const char *>(output->data()) + offset);
+      } else {
+        data =
+            const_cast<char *>(static_cast<const char *>(tensor->data()) + offset);
+      }
+    } else {
+      BPS_CHECK(output) << "GDR pull expects non-null output tensor";
       data =
-        const_cast<char *>(static_cast<const char *>(task->cpubuff) + offset);
-    }else{
-      data =
-        const_cast<char *>(static_cast<const char *> ( (char*)(tensor->data()) + offset ) );
+          const_cast<char *>(static_cast<const char *>(output->data()) + offset);
     }
     // get metadata
-    const int dtype = task->output->dtype();
+    const int dtype = output ? output->dtype() : tensor->dtype();
 
     // false means not to delete data when SArray is deleted
     auto vals = new ps::SArray<char>(data, len, false);
