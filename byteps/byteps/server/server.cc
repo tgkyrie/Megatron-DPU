@@ -38,10 +38,12 @@ struct LatencyLogger {
   LatencyLogger() : start(std::chrono::high_resolution_clock::now()) {}
 
   void record_event(const std::string& name) {
-    if(!record_event_)return;
+    if (!record_event_) return;
     std::lock_guard<std::mutex> lock(mutex_);
     auto now = std::chrono::high_resolution_clock::now();
-    int64_t t = std::chrono::duration_cast<std::chrono::nanoseconds>(now - start).count();
+    int64_t t =
+        std::chrono::duration_cast<std::chrono::nanoseconds>(now - start)
+            .count();
     events.push_back({name, t});
   }
 
@@ -50,7 +52,7 @@ struct LatencyLogger {
     std::ostringstream oss;
     oss << "Latency events:\n";
     for (const auto& e : events) {
-      oss << "  [" << e.name << "] " << e.ns/1000 << " us\n";
+      oss << "  [" << e.name << "] " << e.ns / 1000 << " us\n";
     }
     LOG(INFO) << oss.str();
   }
@@ -79,8 +81,9 @@ void RegisterExpectedWorkers(uint64_t key, int expected_workers) {
     return;
   }
   CHECK_EQ(it->second, expected_workers)
-      << "Key " << key << " registered with inconsistent expected_workers: "
-      << it->second << " vs " << expected_workers;
+      << "Key " << key
+      << " registered with inconsistent expected_workers: " << it->second
+      << " vs " << expected_workers;
 }
 
 int GetExpectedWorkers(uint64_t key) {
@@ -94,7 +97,7 @@ int GetExpectedWorkers(uint64_t key) {
 
 void SendPushResponse(uint64_t key, const ps::KVMeta& req,
                       ps::KVServer<char>* server) {
-  logger_.record_event("push resp begin.key."+std::to_string(key));
+  logger_.record_event("push resp begin.key." + std::to_string(key));
   auto iterator = push_response_map_.find(key);
   if (iterator == push_response_map_.end()) {  // new key
     ps::KVPairs<char> response;
@@ -105,12 +108,12 @@ void SendPushResponse(uint64_t key, const ps::KVMeta& req,
     ps::KVPairs<char>* response = &iterator->second;
     server->Response(req, *response);
   }
-  logger_.record_event("push resp end.key."+std::to_string(key));
+  logger_.record_event("push resp end.key." + std::to_string(key));
 }
 
 void SendPullResponse(const DataHandleType type, const uint64_t key,
                       const ps::KVMeta& req_meta, ps::KVServer<char>* server) {
-  logger_.record_event("pull resp begin.key."+std::to_string(key));
+  logger_.record_event("pull resp begin.key." + std::to_string(key));
   std::lock_guard<std::mutex> lock(pullresp_mu_);
   char* data;
   size_t len;
@@ -145,7 +148,7 @@ void SendPullResponse(const DataHandleType type, const uint64_t key,
     response->vals = ps::SArray<char>(p, len, false);
     server->Response(req_meta, *response);
   }
-  logger_.record_event("pull resp end.key."+std::to_string(key));
+  logger_.record_event("pull resp end.key." + std::to_string(key));
 }
 
 void BytePSServerEngineThread(int i) {
@@ -277,9 +280,9 @@ void BytePSServerEngineThread(int i) {
 }  // namespace server
 
 inline uint64_t now_ns() {
-    struct timespec ts;
-    clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
-    return uint64_t(ts.tv_sec) * 1000000000ull + ts.tv_nsec;
+  struct timespec ts;
+  clock_gettime(CLOCK_MONOTONIC_RAW, &ts);
+  return uint64_t(ts.tv_sec) * 1000000000ull + ts.tv_nsec;
 }
 
 void BytePSHandler(const ps::KVMeta& req_meta,
@@ -365,14 +368,16 @@ void BytePSHandler(const ps::KVMeta& req_meta,
       }
       // buffer the request meta
       updates->request.push_back(req_meta);
+      // Log every push request during initialization
+      LOG(INFO) << "[Server] Init push: key=" << key
+                << " sender=" << req_meta.sender
+                << " collected=" << updates->request.size()
+                << " expected=" << GetExpectedWorkers(key);
       // should send response after collecting all init push
       if (updates->request.size() < (size_t)GetExpectedWorkers(key)) return;
-      if (log_key_info_) {
-        LOG(INFO) << "Collected all " << updates->request.size()
-                  << " requests for key=" << key
-                  << ", init the store buffer size="
-                  << (size_t)req_data.lens[0];
-      }
+      LOG(INFO) << "[Server] Collected all " << updates->request.size()
+                << " requests for key=" << key
+                << ", init the store buffer size=" << (size_t)req_data.lens[0];
       // init stored buffer, use page aligned memory
       size_t aligned_size = common::Align(len, type.dtype);
       PageAlignedMalloc((void**)&stored->tensor, aligned_size);
@@ -387,7 +392,7 @@ void BytePSHandler(const ps::KVMeta& req_meta,
         SendPushResponse(key, req, server);
       }
       updates->request.clear();
-    } else { // not first iteration
+    } else {  // not first iteration
       auto updates = GetUpdateBuf(key);
       auto tid = GetThreadID(key, len);
       if (updates->request.empty()) {  // from the first incoming worker
@@ -441,7 +446,13 @@ void BytePSHandler(const ps::KVMeta& req_meta,
       // add a worker information (request.size() is the # workers received)
       updates->request.push_back(req_meta);
       SendPushResponse(key, req_meta, server);
-      if (sync_mode_ && updates->request.size() == (size_t)GetExpectedWorkers(key)) {
+      // Log push progress
+      LOG(INFO) << "[Server] Push: key=" << key << " sender=" << req_meta.sender
+                << " collected=" << updates->request.size()
+                << " expected=" << GetExpectedWorkers(key);
+      if (sync_mode_ &&
+          updates->request.size() == (size_t)GetExpectedWorkers(key)) {
+        LOG(INFO) << "[Server] All workers collected for key=" << key;
         auto stored = GetStore(key);
         auto& update = updates->merged;
         if (debug_mode_ && (debug_key_ == key)) {
@@ -525,8 +536,8 @@ void init_global_env() {
   is_engine_blocking_ = GetEnv("BYTEPS_SERVER_ENGINE_BLOCKING", 0);
   if (is_engine_blocking_)
     LOG(INFO) << "Enable blocking mode of the server engine";
-  record_event_= GetEnv("DMLC_RECORD_EVENT",0);
-  if (record_event_){
+  record_event_ = GetEnv("DMLC_RECORD_EVENT", 0);
+  if (record_event_) {
     LOG(INFO) << "Enable record trace event";
   }
   // sync or async training

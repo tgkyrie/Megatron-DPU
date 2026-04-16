@@ -59,7 +59,10 @@ def _bps_reduce(input_, group, name):
     )
     # Keep TP reduce semantics explicit: launch async collective and wait
     # precisely at this upper-layer callsite.
-    return bps_ops.synchronize(handle)
+    result = bps_ops.synchronize(handle)
+    # Minimal TP completion log
+    print(f"[TP] done: {name}", flush=True)
+    return result
 
 
 def _split_along_last_dim(input_, group):

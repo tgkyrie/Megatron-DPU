@@ -13,13 +13,14 @@
 // limitations under the License.
 // =============================================================================
 
+#include "global.h"
+
 #include <malloc.h>
 #include <numa.h>
 
 #include <sstream>
 
 #include "compressor/compressor.h"
-#include "global.h"
 
 namespace byteps {
 namespace common {
@@ -42,7 +43,7 @@ bool BytePSGlobal::_is_distributed_job;
 bool BytePSGlobal::_is_cross_pcie_switch;
 uint32_t BytePSGlobal::_partition_bytes = 4096000;
 uint32_t BytePSGlobal::_min_compress_bytes = (1 << 16);
-int BytePSGlobal::_push_thread=1;
+int BytePSGlobal::_push_thread = 1;
 
 int BytePSGlobal::_is_trace = 0;
 int BytePSGlobal::_start_step = 10;
@@ -119,7 +120,8 @@ void BytePSGlobal::Init() {
   _start_step = getenv("BYTEPS_TRACE_START_STEP")
                     ? atoi(getenv("BYTEPS_TRACE_START_STEP"))
                     : _start_step;
-  _push_thread=getenv("BYTEPS_PUSH_THREAD") ? atoi(getenv("BYTEPS_PUSH_THREAD")) : 1;
+  _push_thread =
+      getenv("BYTEPS_PUSH_THREAD") ? atoi(getenv("BYTEPS_PUSH_THREAD")) : 1;
   _end_step = getenv("BYTEPS_TRACE_END_STEP")
                   ? atoi(getenv("BYTEPS_TRACE_END_STEP"))
                   : _end_step;
@@ -422,7 +424,11 @@ bool BytePSGlobal::IsTensorDeclared(const std::string& name) {
     }
     _name_to_cxt[name].initialized = false;
     _name_to_cxt[name].tensor_name = name.c_str();  // disable copy-on-write
-    _name_to_cxt[name].declared_key = (ps::Key)next_key_++;
+    // Use hash-based key assignment to ensure consistent keys across all
+    // workers This is critical for TP+DP mixed mode where different workers may
+    // declare tensors in different orders
+    _name_to_cxt[name].declared_key =
+        (ps::Key)(_built_in_hash_fn(name) % 1000000000);
     BPS_LOG(DEBUG) << "Declared tensor " << name
                    << ", declared key (not PS key): "
                    << _name_to_cxt[name].declared_key
@@ -432,8 +438,8 @@ bool BytePSGlobal::IsTensorDeclared(const std::string& name) {
   return true;
 }
 
-void BytePSGlobal::RegisterTensorExpectedWorkers(
-    const std::string& name, int expected_workers) {
+void BytePSGlobal::RegisterTensorExpectedWorkers(const std::string& name,
+                                                 int expected_workers) {
   std::lock_guard<std::mutex> lock(_context_mutex);
   BPS_CHECK(_name_to_cxt.find(name) != _name_to_cxt.end())
       << name << " is not initialized";
@@ -446,7 +452,8 @@ void BytePSGlobal::RegisterTensorExpectedWorkers(
     return;
   }
   BPS_CHECK_EQ(context.expected_workers, expected_workers)
-      << "Tensor " << name << " was declared with inconsistent expected_workers: "
+      << "Tensor " << name
+      << " was declared with inconsistent expected_workers: "
       << context.expected_workers << " vs " << expected_workers;
 }
 
@@ -670,8 +677,8 @@ PSKV& BytePSGlobal::EncodeDefaultKey(uint64_t key, size_t len) {
     int server = 0;
     if (!_hash_knob.compare(std::string("naive"))) {
       server = Hash_Naive(key) % num_servers;
-    } else if(!_hash_knob.compare(std::string("raw"))){
-      server=key%num_servers;
+    } else if (!_hash_knob.compare(std::string("raw"))) {
+      server = key % num_servers;
     } else if (!_hash_knob.compare(std::string("built_in"))) {
       server = Hash_BuiltIn(key) % num_servers;
     } else if (!_hash_knob.compare(std::string("djb2"))) {
@@ -696,9 +703,10 @@ PSKV& BytePSGlobal::EncodeDefaultKey(uint64_t key, size_t len) {
                    << (100.0 * _server_accumulated_len[server] /
                        _total_accumulated_len)
                    << "%)";
-    
+
     ps::Key ps_key = krs[server].begin() + key;
-    BPS_LOG(DEBUG)<<"key "<<key<<" has ps_key:"<<ps_key<<"=krs[server="<<server<<"]+key "<<key;
+    BPS_LOG(DEBUG) << "key " << key << " has ps_key:" << ps_key
+                   << "=krs[server=" << server << "]+key " << key;
     BPS_CHECK_LT(ps_key, krs[server].end());
     pskv.keys.push_back(ps_key);
     pskv.lens.push_back(len);
@@ -733,7 +741,7 @@ std::size_t PushPullSpeed::_limit = 1024;
 std::chrono::time_point<std::chrono::system_clock> PushPullSpeed::_last_ts;
 bool PushPullSpeed::_initialized = false;
 bool PushPullSpeed::_should_record =
-      getenv("BYTEPS_TELEMETRY_ON") ? atoi(getenv("BYTEPS_TELEMETRY_ON")) : true;
+    getenv("BYTEPS_TELEMETRY_ON") ? atoi(getenv("BYTEPS_TELEMETRY_ON")) : true;
 
 void PushPullSpeed::RecordSpeed(std::shared_ptr<TensorTableEntry> task) {
   std::lock_guard<std::mutex> lock(_mtx);
@@ -753,7 +761,7 @@ void PushPullSpeed::RecordSpeed(std::shared_ptr<TensorTableEntry> task) {
     auto msec = std::chrono::duration_cast<std::chrono::milliseconds>(duration);
 
     entry->ts = msec.count();
-    entry->speed = _acc_size * 1.0 / 1.0e6 / 10; // MegaBytes per second
+    entry->speed = _acc_size * 1.0 / 1.0e6 / 10;  // MegaBytes per second
 
     _data_points.push(entry);
     _acc_size = 0;
@@ -773,15 +781,13 @@ std::shared_ptr<SpeedEntry> PushPullSpeed::GetSpeed() {
   } else {
     entry = std::make_shared<SpeedEntry>();
     entry->ts = 0;
-    entry->speed =  -5.0;
+    entry->speed = -5.0;
   }
 
   return entry;
 }
 
-bool PushPullSpeed::ShouldRecord() {
-  return _should_record;
-}
+bool PushPullSpeed::ShouldRecord() { return _should_record; }
 
 }  // namespace common
 }  // namespace byteps
