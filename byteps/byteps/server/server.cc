@@ -368,16 +368,8 @@ void BytePSHandler(const ps::KVMeta& req_meta,
       }
       // buffer the request meta
       updates->request.push_back(req_meta);
-      // Log every push request during initialization
-      LOG(INFO) << "[Server] Init push: key=" << key
-                << " sender=" << req_meta.sender
-                << " collected=" << updates->request.size()
-                << " expected=" << GetExpectedWorkers(key);
       // should send response after collecting all init push
       if (updates->request.size() < (size_t)GetExpectedWorkers(key)) return;
-      LOG(INFO) << "[Server] Collected all " << updates->request.size()
-                << " requests for key=" << key
-                << ", init the store buffer size=" << (size_t)req_data.lens[0];
       // init stored buffer, use page aligned memory
       size_t aligned_size = common::Align(len, type.dtype);
       PageAlignedMalloc((void**)&stored->tensor, aligned_size);
@@ -446,13 +438,8 @@ void BytePSHandler(const ps::KVMeta& req_meta,
       // add a worker information (request.size() is the # workers received)
       updates->request.push_back(req_meta);
       SendPushResponse(key, req_meta, server);
-      // Log push progress
-      LOG(INFO) << "[Server] Push: key=" << key << " sender=" << req_meta.sender
-                << " collected=" << updates->request.size()
-                << " expected=" << GetExpectedWorkers(key);
       if (sync_mode_ &&
           updates->request.size() == (size_t)GetExpectedWorkers(key)) {
-        LOG(INFO) << "[Server] All workers collected for key=" << key;
         auto stored = GetStore(key);
         auto& update = updates->merged;
         if (debug_mode_ && (debug_key_ == key)) {

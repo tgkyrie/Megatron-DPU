@@ -59,17 +59,10 @@ def build_byteps_group_name(scope: str, logical_name: str) -> str:
     raise ValueError(f"Unsupported BytePS scope: {scope}")
 
 
-def declare_and_cache_byteps_group(name: str, expected_workers: int, scope: str = "") -> None:
+def declare_and_cache_byteps_group(name: str, expected_workers: int) -> None:
     cached_workers = _DECLARED_BPS_GROUPS.get(name)
     if cached_workers is None:
-        # Only print debug logs for DP scope
-        if scope == "dp":
-            print(f"{_get_rank_prefix()} [DEBUG] bps.declare start: name={name}, expected_workers={expected_workers}", flush=True)
-        # Important: bps.declare must be called in the same order on all workers
-        # to ensure consistent declared_key assignment
         bps.declare(name, expected_workers=expected_workers)
-        if scope == "dp":
-            print(f"{_get_rank_prefix()} [DEBUG] bps.declare done: name={name}", flush=True)
         _DECLARED_BPS_GROUPS[name] = expected_workers
         return
     if cached_workers != expected_workers:
@@ -77,8 +70,6 @@ def declare_and_cache_byteps_group(name: str, expected_workers: int, scope: str 
             f"BytePS tensor name {name} was declared with inconsistent group size: "
             f"{cached_workers} vs {expected_workers}"
         )
-    if scope == "dp":
-        print(f"{_get_rank_prefix()} [DEBUG] bps.declare cached: name={name}, expected_workers={expected_workers}", flush=True)
 
 
 def _declare_group_and_get_name(group, scope: str, logical_name: str) -> str:
@@ -86,21 +77,7 @@ def _declare_group_and_get_name(group, scope: str, logical_name: str) -> str:
         raise ValueError("group must not be None")
     expected_workers = group.size()
     name = build_byteps_group_name(scope, logical_name)
-    
-    # Only print debug logs for DP scope
-    if scope == "dp":
-        print(f"{_get_rank_prefix()} [DEBUG] Declaring BytePS group: scope={scope}, name={logical_name}, group_size={group.size()}", flush=True)
-        # Debug: print group member ranks
-        try:
-            import torch.distributed as dist
-            group_ranks = dist.get_process_group_ranks(group)
-            print(f"{_get_rank_prefix()} [DEBUG] BytePS group members: {group_ranks}, expected_workers={expected_workers}", flush=True)
-        except Exception as e:
-            print(f"{_get_rank_prefix()} [DEBUG] Could not get group ranks: {e}", flush=True)
-    
-    declare_and_cache_byteps_group(name, expected_workers, scope)
-    if scope == "dp":
-        print(f"{_get_rank_prefix()} [DEBUG] _declare_group_and_get_name done: returning name={name}", flush=True)
+    declare_and_cache_byteps_group(name, expected_workers)
     return name
 
 
@@ -133,9 +110,6 @@ def byteps_allreduce_async_inplace(
     priority: int = 0,
 ):
     name = _declare_group_and_get_name(group, scope, logical_name)
-    # Only print debug logs for DP scope
-    if scope == "dp":
-        print(f"{_get_rank_prefix()} [DEBUG] byteps_allreduce_async_inplace: scope={scope}, name={name}, shape={tensor.shape}, group_size={group.size()}")
     result = bps_ops.push_pull_async_inplace(
         tensor,
         average=average,
@@ -143,8 +117,6 @@ def byteps_allreduce_async_inplace(
         version=version,
         priority=priority,
     )
-    if scope == "dp":
-        print(f"{_get_rank_prefix()} [DEBUG] byteps_allreduce_async_inplace done: scope={scope}, name={name}")
     return result
 
 
@@ -158,9 +130,6 @@ def byteps_allreduce_inplace(
     priority: int = 0,
 ):
     name = _declare_group_and_get_name(group, scope, logical_name)
-    # Only print debug logs for DP scope
-    if scope == "dp":
-        print(f"{_get_rank_prefix()} [DEBUG] byteps_allreduce_inplace: scope={scope}, name={name}, shape={tensor.shape}, group_size={group.size()}")
     # Use async inplace + synchronize for synchronous operation
     handle = bps_ops.push_pull_async_inplace(
         tensor,
@@ -170,8 +139,6 @@ def byteps_allreduce_inplace(
         priority=priority,
     )
     bps_ops.synchronize(handle)
-    if scope == "dp":
-        print(f"{_get_rank_prefix()} [DEBUG] byteps_allreduce_inplace done: scope={scope}, name={name}")
     return tensor
 
 
@@ -192,8 +159,6 @@ def pre_declare_all_byteps_groups(
         use_dpu_dp: Whether DP BytePS is enabled
     """
     import torch.distributed as dist
-    
-    print(f"{_get_rank_prefix()} [DEBUG] Pre-declaring all BytePS groups: TP layers={num_tp_layers}, DP buckets={num_dp_buckets}")
     
     # Get parallel sizes
     tp_size = get_tensor_model_parallel_world_size()
@@ -245,5 +210,3 @@ def pre_declare_all_byteps_groups(
     # Global barrier to ensure all workers have finished pre-declaration
     if dist.is_initialized():
         dist.barrier()
-    
-    print(f"{_get_rank_prefix()} [DEBUG] Pre-declared {len(_DECLARED_BPS_GROUPS)} BytePS groups")

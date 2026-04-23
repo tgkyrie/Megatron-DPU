@@ -430,12 +430,8 @@ def finalize_model_grads(
     # All-reduce / reduce-scatter across DP replicas.
     if config.timers is not None:
         config.timers('all-grads-sync', log_level=1).start(barrier=config.barrier_with_L1_time)
-    print(f"[DEBUG] finalize_model_grads: calling finish_grad_sync for {len(model)} model chunks", flush=True)
-    for i, model_chunk in enumerate(model):
-        print(f"[DEBUG] finalize_model_grads: calling finish_grad_sync for model_chunk {i}", flush=True)
+    for model_chunk in model:
         model_chunk.finish_grad_sync()
-        print(f"[DEBUG] finalize_model_grads: finish_grad_sync done for model_chunk {i}", flush=True)
-    print(f"[DEBUG] finalize_model_grads: all finish_grad_sync calls completed", flush=True)
     if config.timers is not None:
         config.timers('all-grads-sync').stop()
 

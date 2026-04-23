@@ -67,14 +67,12 @@ def _push_pull_group_function_factory(tensor):
     return 'byteps_torch_push_pull_group_sync_' + tensor.type().replace('.', '_')
 
 def _do_push_pull_async(tensor, output, average, name, version=0, priority=0):
-    print(f"[DEBUG] _do_push_pull_async: name={name}, shape={tensor.shape}", flush=True)
     c_lib.byteps_torch_declare_tensor(name.encode() if name is not None else _NULL)
     function = _check_function(_push_pull_function_factory, tensor)
     handle = getattr(c_lib, function)(tensor, output, average,
                                       name.encode() if name is not None else _NULL,
                                       version, priority)
     _handle_map[handle] = (tensor, output)
-    print(f"[DEBUG] _do_push_pull_async: name={name}, handle={handle}", flush=True)
     return handle
 
 def _do_push_pull_group_sync(tensor, output, average, name, version=0, priority=0):

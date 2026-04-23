@@ -393,27 +393,20 @@ class _ParamAndGradBucketGroup:
             # 注意：上面已经做过 gradient_scaling_factor *= ，这里要保持语义一致
             byteps_average = self.ddp_config.average_in_collective
 
-            print(f"[DEBUG] DP reduce start: num_buckets={len(self.buckets)}, async_op={async_op}, group_size={communication_group.size()}", flush=True)
-
             if async_op:
                 handles = []
-                try:
-                    for _, bucket in enumerate(self.buckets):
-                        handle = byteps_allreduce_async_inplace(
-                            bucket.grad_data,
-                            group=communication_group,
-                            scope='dp',
-                            logical_name=f"bucket_{bucket.bucket_id}",
-                            average=byteps_average,
-                            version=0,
-                            priority=0,
-                        )
-                        handles.append(handle)
-                    self.grad_reduce_handle = handles
-                    print(f"[DEBUG] DP reduce async launched: {len(handles)} handles", flush=True)
-                except Exception as e:
-                    print(f"[DEBUG] DP reduce async ERROR: {e}", flush=True)
-                    raise
+                for _, bucket in enumerate(self.buckets):
+                    handle = byteps_allreduce_async_inplace(
+                        bucket.grad_data,
+                        group=communication_group,
+                        scope='dp',
+                        logical_name=f"bucket_{bucket.bucket_id}",
+                        average=byteps_average,
+                        version=0,
+                        priority=0,
+                    )
+                    handles.append(handle)
+                self.grad_reduce_handle = handles
                 return
             else:
                 for _, bucket in enumerate(self.buckets):
@@ -428,7 +421,6 @@ class _ParamAndGradBucketGroup:
                     )
                 # 整个操作是同步完成的，不存在异步 handle
                 self.grad_reduce_handle = None
-                print(f"[DEBUG] DP reduce sync done: {len(self.buckets)} buckets")
                 return
 
 
@@ -503,11 +495,9 @@ class _ParamAndGradBucketGroup:
         communication call to complete. When ddp_config.overlap_grad_reduce is set to False,
         makes synchronous call.
         """
-        print(f"[DEBUG] finish_grad_sync called: overlap_grad_reduce={self.ddp_config.overlap_grad_reduce}, use_dpu_reduce={getattr(self.ddp_config, 'use_dpu_reduce', False)}", flush=True)
         self.param_gather_dispatched = False
         # If overlap_grad_reduce is False, start (and finish) synchronous communication call here.
         if not self.ddp_config.overlap_grad_reduce:
-            print(f"[DEBUG] finish_grad_sync: calling start_grad_sync (sync mode)", flush=True)
             self.start_grad_sync()
             return
         # When using multiple DistOpt instances, we don't need to sync here as we launch
@@ -530,13 +520,9 @@ class _ParamAndGradBucketGroup:
                 f"({len(self.params_with_grad)}/{len(self.params)} params have grad available)"
             )
             handles = self.grad_reduce_handle
-            print(f"[DEBUG] finish_grad_sync: synchronizing {len(handles)} BytePS handles", flush=True)
-            for i, handle in enumerate(handles):
-                print(f"[DEBUG] finish_grad_sync: synchronizing handle {i}/{len(handles)}", flush=True)
+            for handle in handles:
                 bps_ops.synchronize(handle)
-                print(f"[DEBUG] finish_grad_sync: handle {i} synchronized", flush=True)
             self.grad_reduce_handle = None
-            print(f"[DEBUG] finish_grad_sync: all handles synchronized", flush=True)
 
     def register_grad_ready(self, param: torch.nn.Parameter):
         """
