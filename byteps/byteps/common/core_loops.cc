@@ -48,6 +48,43 @@ inline bool IsGdrLenProbeEnabled() {
   return enabled;
 }
 
+inline bool IsGdrCpuFallbackEnabled() {
+  static bool enabled = []() {
+    const char* v = getenv("BYTEPS_GDR_FALLBACK");
+    return v ? atoi(v) != 0 : true;
+  }();
+  return enabled;
+}
+
+inline size_t GdrCpuFallbackThresholdBytes() {
+  static size_t threshold = []() {
+    constexpr size_t kMiB = 1024UL * 1024UL;
+    const char* explicit_mb = getenv("BYTEPS_GDR_FALLBACK_THRESHOLD_MB");
+    if (explicit_mb) {
+      long mb = atol(explicit_mb);
+      return mb > 0 ? static_cast<size_t>(mb) * kMiB : 0;
+    }
+
+    const char* cache_mb_env = getenv("BYTEPS_RDMA_MR_CACHE_LIMIT_MB");
+    long cache_mb = cache_mb_env ? atol(cache_mb_env) : 192;
+    if (cache_mb > 0) {
+      return static_cast<size_t>(cache_mb) * kMiB * 3 / 4;
+    }
+    return 128UL * kMiB;
+  }();
+  return threshold;
+}
+
+inline bool ShouldUseGdrCpuFallback(
+    const std::shared_ptr<TensorTableEntry>& task, size_t tensor_size) {
+  if (!IsGdrCpuFallbackEnabled()) return false;
+  if (!task || task->device == CPU_DEVICE_ID || task->cpubuff == nullptr) {
+    return false;
+  }
+  size_t threshold = GdrCpuFallbackThresholdBytes();
+  return tensor_size >= threshold;
+}
+
 inline size_t ClampLenByCudaAddressRange(const char* tag, uint64_t key, char* ptr,
                                          size_t len) {
   if (!ptr || len == 0) return len;
@@ -759,7 +796,24 @@ bool RunGDRPushLoopOnce() {
       }
 
       char* data;
-      if (task->device == CPU_DEVICE_ID) {
+      bool gdr_cpu_fallback = ShouldUseGdrCpuFallback(task, tensor_size);
+      if (gdr_cpu_fallback) {
+        CUDA_CALL(cudaSetDevice(BytePSGlobal::GetLocalRank()));
+        const void* gpu_base = task->gpu_ptr ? task->gpu_ptr : tensor->data();
+        auto* gpu_data =
+            const_cast<char*>(static_cast<const char*>(gpu_base) + offset);
+        data = const_cast<char*>(
+            static_cast<const char*>(task->cpubuff) + offset);
+        CUDA_CALL(cudaMemcpy(data, gpu_data, len, cudaMemcpyDeviceToHost));
+        if (gdr_debug) {
+          fprintf(stderr,
+                  "[GDR-DEBUG-PUSH] CPU fallback key=%llu gpu=%p cpu=%p "
+                  "len=%zu tensor_size=%zu threshold=%zu\n",
+                  (unsigned long long)task->key, gpu_data, data, len,
+                  (size_t)tensor_size, GdrCpuFallbackThresholdBytes());
+          fflush(stderr);
+        }
+      } else if (task->device == CPU_DEVICE_ID) {
         const void* base = task->cpubuff ? task->cpubuff : tensor->data();
         data = const_cast<char*>(static_cast<const char*>(base) + offset);
         if (gdr_debug) {
@@ -784,7 +838,7 @@ bool RunGDRPushLoopOnce() {
                 (void*)data);
         fflush(stderr);
       }
-      if (task->device != CPU_DEVICE_ID) {
+      if (task->device != CPU_DEVICE_ID && !gdr_cpu_fallback) {
         len = ClampLenByCudaAddressRange("PUSH", task->key, data, len);
         if (IsGdrLenProbeEnabled()) {
           len = ClampLenByCudaReadableProbe("PUSH", task->key, data, len);
@@ -878,7 +932,26 @@ bool RunGDRPullLoopOnce() {
     }
 
     char* data;
-    if (task->device == CPU_DEVICE_ID) {
+    char* fallback_gpu_data = nullptr;
+    bool gdr_cpu_fallback = ShouldUseGdrCpuFallback(task, tensor_size);
+    if (gdr_cpu_fallback) {
+      const void* gpu_base = output
+                                 ? output->data()
+                                 : (task->gpu_ptr ? task->gpu_ptr
+                                                  : tensor->data());
+      fallback_gpu_data =
+          const_cast<char*>(static_cast<const char*>(gpu_base) + offset);
+      data =
+          const_cast<char*>(static_cast<const char*>(task->cpubuff) + offset);
+      if (gdr_debug) {
+        fprintf(stderr,
+                "[GDR-DEBUG-PULL] CPU fallback key=%llu gpu=%p cpu=%p "
+                "len=%zu tensor_size=%zu threshold=%zu\n",
+                (unsigned long long)task->key, fallback_gpu_data, data, len,
+                (size_t)tensor_size, GdrCpuFallbackThresholdBytes());
+        fflush(stderr);
+      }
+    } else if (task->device == CPU_DEVICE_ID) {
       const void* base = task->cpubuff
                              ? task->cpubuff
                              : (output ? output->data() : tensor->data());
@@ -904,7 +977,7 @@ bool RunGDRPullLoopOnce() {
       fprintf(stderr, "[GDR-DEBUG-PULL] Final data address: %p\n", (void*)data);
       fflush(stderr);
     }
-    if (task->device != CPU_DEVICE_ID) {
+    if (task->device != CPU_DEVICE_ID && !gdr_cpu_fallback) {
       len = ClampLenByCudaAddressRange("PULL", task->key, data, len);
       if (IsGdrLenProbeEnabled()) {
         len = ClampLenByCudaReadableProbe("PULL", task->key, data, len);
@@ -932,11 +1005,25 @@ bool RunGDRPullLoopOnce() {
     auto vals = new ps::SArray<char>(data, len, false);
 
     // issue pull
-    BytePSGlobal::GetPS()->ZPull(pskv.keys, vals, &pskv.lens, cmd,
-                                 [vals, task, q]() {
-                                   delete vals;
-                                   FinishOrProceed(task);
-                                 });
+    if (gdr_cpu_fallback) {
+      char* cpu_data = data;
+      size_t copy_len = len;
+      BytePSGlobal::GetPS()->ZPull(
+          pskv.keys, vals, &pskv.lens, cmd,
+          [vals, task, q, fallback_gpu_data, cpu_data, copy_len]() {
+            CUDA_CALL(cudaSetDevice(BytePSGlobal::GetLocalRank()));
+            CUDA_CALL(cudaMemcpy(fallback_gpu_data, cpu_data, copy_len,
+                                 cudaMemcpyHostToDevice));
+            delete vals;
+            FinishOrProceed(task);
+          });
+    } else {
+      BytePSGlobal::GetPS()->ZPull(pskv.keys, vals, &pskv.lens, cmd,
+                                   [vals, task, q]() {
+                                     delete vals;
+                                     FinishOrProceed(task);
+                                   });
+    }
   } else {
     std::this_thread::sleep_for(std::chrono::nanoseconds(1000));
   }
