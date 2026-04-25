@@ -1,8 +1,8 @@
 import torch
-from typing import Optional, List, Dict, Tuple
+from typing import List, Dict, Tuple
 from collections import defaultdict
 
-from byteps.torch.ops import _do_push_pull_async,synchronize
+from byteps.torch.ops import _do_push_pull_async, synchronize
 
 # ===== 全局通信 Buffer 池 =====
 class _CommBufferPool:
@@ -54,7 +54,7 @@ _COMM_BUFFER_POOL = _CommBufferPool()
 def allreduce(
     tensor: torch.Tensor,
     async_op: bool = False,
-    average: int =False,
+    average: bool = False,
     name=None,
 ) :
     if name == None:
@@ -65,13 +65,17 @@ def allreduce(
     # --- 2. 拷贝 input tensor → comm_buf（HtoD）---
     # 使用当前 stream（通常由 PyTorch 上下文管理）
     comm_buf.copy_(tensor)
-    handle=_do_push_pull_async(comm_buf,comm_buf,False,name,0,0)
-
-    tensor.copy_(comm_buf)
+    handle = _do_push_pull_async(comm_buf, comm_buf, average, name, 0, 0)
     if async_op:
+        # Async mode returns the raw BytePS handle. Callers that need the
+        # original tensor updated must run:
+        #   out = synchronize(handle)
+        #   tensor.copy_(out)
         return handle
-    
-    return synchronize(handle)
+
+    synchronize(handle)
+    tensor.copy_(comm_buf)
+    return tensor
     
 # ===== 核心函数：ps_allreduce with fixed buffer =====
 # def ps_allreduce(

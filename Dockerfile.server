@@ -1,8 +1,7 @@
 ########################
-# Dockerfile.arm64server
-# - arm64 BytePS server-only image
-# - single-stage, keep fuller environment
-# - fix ps-lite zmq/test build issue for server-only
+# Dockerfile.server
+# - x86_64 / 通用 BytePS server-only image
+# - CPU-only server build，不依赖 CUDA runtime
 ########################
 
 FROM ubuntu:22.04
@@ -61,23 +60,6 @@ RUN set -eux; \
     chmod +x /usr/local/server.sh /usr/local/scheduler.sh /usr/local/worker.sh /usr/local/worker_ddp.sh /usr/local/worker_single.sh /usr/local/pushpull.sh /usr/local/allreduce.sh
 
 COPY ./byteps/ ${BYTEPS_PATH}/
-
-# arm64: 去掉 x86 专属编译选项
-RUN set -eux; \
-    arch="$(dpkg --print-architecture)"; \
-    if [ "$arch" = "arm64" ]; then \
-      echo "[arm64] patch setup.py flags + ps-lite flags"; \
-      sed -i -E \
-        -e "s/'-mno-avx512f',?[[:space:]]*//g" \
-        -e "s/'-msse2',?[[:space:]]*//g" \
-        -e "s/'-stdlib=libc\\+\\+',?[[:space:]]*//g" \
-        -e "s/'-march=native'/'-march=armv8-a'/g" \
-        "${BYTEPS_PATH}/setup.py"; \
-      if [ -d "${BYTEPS_PATH}/3rdparty/ps-lite" ]; then \
-        grep -RIl -- "-msse2" "${BYTEPS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-msse2([[:space:]]|$)/ /g'; \
-        grep -RIl -- "-mno-avx512f" "${BYTEPS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-mno-avx512f([[:space:]]|$)/ /g'; \
-      fi; \
-    fi
 
 RUN set -eux; \
     cd "${BYTEPS_PATH}"; \

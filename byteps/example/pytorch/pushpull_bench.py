@@ -29,6 +29,12 @@ def parse_args():
                    help="数据类型 (float32/float16)")
     p.add_argument("--cpu-tensor",default=False,action="store_true",
                    help="cpu tensor")
+    p.add_argument("--check", action="store_true",
+                   help="先做一次正确性校验，再进入 benchmark")
+    p.add_argument("--check-only", action="store_true",
+                   help="只做一次正确性校验，不跑 benchmark")
+    p.add_argument("--check-size-mb", type=float, default=4.0,
+                   help="正确性校验时使用的张量大小 (MB)")
     return p.parse_args()
 
 def push_pull_grad_group_sync(tensor):
@@ -38,8 +44,35 @@ def push_pull_grad_group_sync(tensor):
             name="Gradient."+name)
     return handle, grad_count
 
-def do_allreduce(tensor):
-    allreduce(tensor,False,True,"test")
+def do_allreduce(tensor, name):
+    return allreduce(tensor, False, True, name)
+
+
+def validate_collective(args, rank, world_size, dtype):
+    elem_size = torch.tensor([], dtype=dtype).element_size()
+    elems = max(1, int(args.check_size_mb * 1024 * 1024 / elem_size))
+    expected = float(sum(range(1, world_size + 1))) / float(world_size)
+
+    if args.cpu_tensor:
+        tensor = torch.full((elems,), float(rank + 1), dtype=dtype)
+    else:
+        tensor = torch.full((elems,), float(rank + 1), device="cuda", dtype=dtype)
+
+    do_allreduce(tensor, "gdr_check")
+    if not args.cpu_tensor:
+        torch.cuda.synchronize()
+
+    max_err = (tensor.float() - expected).abs().max().item()
+    tol = 5e-3 if dtype == torch.float16 else 1e-6
+    print(
+        f"[byteps-pushpull-check] rank={rank} expected={expected:.6f} "
+        f"max_err={max_err:.6e} tol={tol:.6e}"
+    )
+    if max_err > tol:
+        raise RuntimeError(
+            f"GDR push_pull check failed on rank={rank}: "
+            f"max_err={max_err} > tol={tol}"
+        )
 
 def main():
     args = parse_args()
@@ -51,7 +84,9 @@ def main():
     rank = bps.rank()
     world_size = bps.size()
 
-    local_rank = int(os.environ.get("LOCAL_RANK", 0))
+    local_rank = int(
+        os.environ.get("LOCAL_RANK", os.environ.get("BYTEPS_LOCAL_RANK", bps.local_rank()))
+    )
     if not args.cpu_tensor:
         print("Using GPU Tensor")
         torch.cuda.set_device(local_rank)
@@ -66,10 +101,7 @@ def main():
         tensor = torch.ones(elems, device="cuda", dtype=dtype)
 
     def do_push_pull():
-        # bps.push_pull(tensor, average=True, name="bench")
-        handle,gc=push_pull_grad_group_sync(tensor)
-        # if not args.cpu_tensor:
-            # torch.cuda.synchronize()
+        handle, gc = push_pull_grad_group_sync(tensor)
         return handle
     if rank == 0:
         print(
@@ -77,13 +109,18 @@ def main():
             f"world_size={world_size} size_mb={args.size_mb} dtype={args.dtype}"
         )
 
+    if args.check or args.check_only:
+        validate_collective(args, rank, world_size, dtype)
+        if rank == 0:
+            print("[byteps-pushpull-check] validation passed")
+        if args.check_only:
+            return
+
     # ---------------------------
     # warmup
     # ---------------------------
     for _ in range(args.warmup):
-        # handle=do_push_pull()
-        # bps.synchronize(handle=handle)
-        do_allreduce(tensor)
+        do_allreduce(tensor, "gdr_bench")
 
     # ---------------------------
     # benchmark
@@ -91,9 +128,7 @@ def main():
     for i in range(args.iters):
         time.sleep(0.5)
         t0 = time.time()
-        # handle=do_push_pull()
-        # bps.synchronize(handle=handle)
-        do_allreduce(tensor)
+        do_allreduce(tensor, "gdr_bench")
         dur_ms = (time.time() - t0) * 1000.0
 
         if True:

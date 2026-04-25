@@ -73,7 +73,6 @@ class RDMAVan : public Van {
   virtual std::string GetType() const { return std::string("rdma"); }
 
   Postoffice* postoffice_;
-  std::vector<uint64_t> push_duration;
   enum class RegisterRangeSource {
     kOriginal = 0,
     kCudaExact = 1,
@@ -188,10 +187,6 @@ class RDMAVan : public Van {
 
     CHECK(should_stop_);
 
-    printf("printing duration\n");
-    for (auto& dur : push_duration) {
-      printf("duration: %lld\n", dur);
-    }
     PS_VLOG(1) << "Stopping cq_polling_thread_.";
     if (cq_polling_thread_) {
       cq_polling_thread_->join();
@@ -639,10 +634,6 @@ class RDMAVan : public Van {
       trans->SendPushResponse(msg, msg_buf, addr_tuple);
     } else if (!msg.meta.push && msg.meta.request) {
       // worker, pull request
-      // static std::atomic<uint64_t> last_ts_ns{0};
-      // uint64_t now = now_ns();
-      // uint64_t prev = last_ts_ns.exchange(now, std::memory_order_relaxed);
-      // push_duration.push_back(now-prev);
       trans->SendPullRequest(msg, msg_buf, addr_tuple);
     } else if (!msg.meta.push && !msg.meta.request) {
       // server, pull response
