@@ -492,14 +492,29 @@ class RDMATransport : public Transport {
     // further, it does not send keys and lens since these meta already carries
     // these info
     struct ibv_sge my_sge;
-    my_sge.addr = reinterpret_cast<uint64_t>(msg_buf->mrs[0].first->addr);
+    // Use the payload pointer stored in msg_buf so SGE address and MR/lkey are
+    // guaranteed to come from the same buffer view.
+    my_sge.addr = reinterpret_cast<uint64_t>(msg_buf->data[1].data());
     // support variable data length
     CHECK(msg.data.size() == 3);
     // the data size sent this time must be no larger than the one we registered
     // the first time
-    CHECK(msg.data[1].size() <= msg_buf->mrs[0].second);
-    my_sge.length = msg.data[1].size();
+    CHECK(msg_buf->data[1].size() <= msg_buf->mrs[0].second);
+    my_sge.length = msg_buf->data[1].size();
     my_sge.lkey = msg_buf->mrs[0].first->lkey;
+
+    // Sanity check: the SGE address must lie inside the registered MR range.
+    auto mr_base = reinterpret_cast<uintptr_t>(msg_buf->mrs[0].first->addr);
+    auto mr_end = mr_base + msg_buf->mrs[0].first->length;
+    auto sge_base = reinterpret_cast<uintptr_t>(msg_buf->data[1].data());
+    auto sge_end = sge_base + msg_buf->data[1].size();
+    CHECK(sge_base >= mr_base && sge_end <= mr_end)
+        << "SGE out of MR range"
+        << ", key=" << msg.meta.key
+        << ", sge=[" << (void*)sge_base << "," << (void*)sge_end << ")"
+        << ", mr=[" << (void*)mr_base << "," << (void*)mr_end << ")"
+        << ", sge_len=" << msg_buf->data[1].size()
+        << ", mr_len=" << msg_buf->mrs[0].first->length;
 
     // this rdma-write will not trigger any signal both remotely and locally
     struct ibv_send_wr wr, *bad_wr = nullptr;
@@ -524,7 +539,7 @@ class RDMATransport : public Transport {
 
   void SendPullRequest(Message& msg, MessageBuffer* msg_buf,
                        RemoteTuple remote_tuple) {
-    CHECK_EQ(msg_buf->mrs.size(), 0);
+    CHECK_LE(msg_buf->mrs.size(), 1);
     Send(msg, msg_buf, remote_tuple);
   }
 
@@ -536,7 +551,7 @@ class RDMATransport : public Transport {
 
   virtual void SendPullResponse(Message& msg, MessageBuffer* msg_buf,
                                 RemoteTuple remote_tuple, size_t lkey) {
-    CHECK_EQ(msg_buf->mrs.size(), 0);
+    CHECK_LE(msg_buf->mrs.size(), 1);
 
     auto raddr = msg.meta.addr;
     auto rkey = msg.meta.option;

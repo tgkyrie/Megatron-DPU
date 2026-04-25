@@ -16,6 +16,7 @@
 #include <cuda_runtime.h>
 #include <unistd.h>
 #include <torch/extension.h>
+#include <cstdlib>
 #include <cstring>
 #include <memory>
 #include <thread>
@@ -34,10 +35,11 @@ namespace common {
 extern "C" {
 
 void byteps_init() {
-  int use_gdr=std::stoi(getenv("DMLC_USE_GDR"));
-  if(use_gdr){
+  const char* use_gdr_env = getenv("DMLC_USE_GDR");
+  int use_gdr = use_gdr_env ? atoi(use_gdr_env) : 0;
+  if (use_gdr) {
     byteps_lazy_init_for_gdr();
-  }else{
+  } else {
     byteps_lazy_init();
   }
   BytePSGlobal::GetOrInitPS();
@@ -373,6 +375,8 @@ Status EnqueueTensor(BPSContext &context, std::shared_ptr<Tensor> input,
     }
     CUDA_CALL(cudaHostGetDevicePointer(&(context.gpu_ptr),
                                        const_cast<void *>(input->data()), 0));
+  } else {
+    context.gpu_ptr = const_cast<void *>(input->data());
   }
 
   e->cpubuff = context.cpubuff;
@@ -383,6 +387,8 @@ Status EnqueueTensor(BPSContext &context, std::shared_ptr<Tensor> input,
   e->total_partnum = context.key_list.size();
 
   std::vector<std::shared_ptr<TensorTableEntry>> partitions;
+  // Keep partition semantics consistent across GDR/non-GDR paths:
+  // each partition carries base pointers and uses offset at send/recv time.
   PartitionTensor(e, partitions);
   BPS_CHECK_EQ(context.key_list.size(), partitions.size())
       << name << ": " << context.key_list.size() << ", " << partitions.size();

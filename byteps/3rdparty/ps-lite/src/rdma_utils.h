@@ -166,6 +166,7 @@ struct MessageBuffer {
   char *inline_buf;
   std::vector<SArray<char>> data;
   std::vector<std::pair<MRPtr, size_t>> mrs;
+  bool release_mrs_on_completion = true;
 };
 
 struct RequestContext {

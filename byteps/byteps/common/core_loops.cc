@@ -13,23 +13,149 @@
 // limitations under the License.
 // =============================================================================
 
+#include "core_loops.h"
 
 #include <cuda_runtime.h>
 
 #include <chrono>
+#include <cstdint>
+#include <cstdlib>
 #include <memory>
 
 #include "common.h"
 #include "compressor/compressor.h"
-#include "core_loops.h"
 #include "global.h"
 #include "logging.h"
 
 namespace byteps {
 namespace common {
 
+namespace {
+
+inline bool IsRdmaMrDebugEnabled() {
+  static bool enabled = []() {
+    const char* v = getenv("BYTEPS_RDMA_MR_DEBUG");
+    return v && atoi(v) != 0;
+  }();
+  return enabled;
+}
+
+inline bool IsGdrLenProbeEnabled() {
+  static bool enabled = []() {
+    const char* v = getenv("BYTEPS_GDR_LEN_PROBE");
+    return v && atoi(v) != 0;
+  }();
+  return enabled;
+}
+
+inline size_t ClampLenByCudaAddressRange(const char* tag, uint64_t key, char* ptr,
+                                         size_t len) {
+  if (!ptr || len == 0) return len;
+
+  cudaPointerAttributes attr;
+  auto st = cudaPointerGetAttributes(&attr, ptr);
+  if (st != cudaSuccess) {
+    if (IsRdmaMrDebugEnabled()) {
+      fprintf(stderr,
+              "[GDR-DEBUG-ADDR] %s key=%llu cudaPointerGetAttributes failed: "
+              "ptr=%p len=%zu err=%s\n",
+              tag, (unsigned long long)key, ptr, len, cudaGetErrorString(st));
+      fflush(stderr);
+    }
+    return len;
+  }
+
+#if CUDART_VERSION >= 10000
+  auto mem_type = attr.type;
+#else
+  auto mem_type = attr.memoryType;
+#endif
+
+  if (IsRdmaMrDebugEnabled()) {
+    fprintf(stderr,
+            "[GDR-DEBUG-ADDR] %s key=%llu ptr=%p mem_type=%d device=%d "
+            "device_ptr=%p host_ptr=%p len=%zu\n",
+            tag, (unsigned long long)key, ptr, (int)mem_type, attr.device,
+#if CUDART_VERSION >= 10000
+            attr.devicePointer, attr.hostPointer,
+#else
+            attr.devicePointer, attr.hostPointer,
+#endif
+            len);
+    fflush(stderr);
+  }
+
+  if (mem_type != cudaMemoryTypeDevice) {
+    if (IsRdmaMrDebugEnabled()) {
+      fprintf(stderr,
+              "[GDR-DEBUG-ADDR] %s key=%llu ptr=%p is not device memory "
+              "(mem_type=%d)\n",
+              tag, (unsigned long long)key, ptr, (int)mem_type);
+      fflush(stderr);
+    }
+  }
+
+  return len;
+}
+
+inline bool ProbeDeviceReadableByte(const char* p) {
+  if (!p) return false;
+  char v = 0;
+  auto st = cudaMemcpy(&v, p, 1, cudaMemcpyDeviceToHost);
+  if (st == cudaSuccess) return true;
+  // clear sticky error status so subsequent CUDA calls are not polluted
+  cudaGetLastError();
+  return false;
+}
+
+inline size_t ClampLenByCudaReadableProbe(const char* tag, uint64_t key, char* ptr,
+                                          size_t len) {
+  if (!ptr || len == 0) return len;
+
+  // Fast path: tail byte readable => keep original len.
+  if (ProbeDeviceReadableByte(ptr + (len - 1))) {
+    if (IsRdmaMrDebugEnabled()) {
+      fprintf(stderr,
+              "[GDR-DEBUG-LEN] %s key=%llu probe keep len=%zu (ptr=%p)\n", tag,
+              (unsigned long long)key, len, ptr);
+      fflush(stderr);
+    }
+    return len;
+  }
+
+  // If first byte is already unreadable, this pointer is not usable.
+  if (!ProbeDeviceReadableByte(ptr)) {
+    fprintf(stderr,
+            "[GDR-DEBUG-LEN] %s key=%llu unreadable base ptr=%p, len=%zu\n",
+            tag, (unsigned long long)key, ptr, len);
+    fflush(stderr);
+    return 0;
+  }
+
+  // Binary search the maximum readable prefix length.
+  size_t lo = 1;      // readable
+  size_t hi = len;    // not readable at hi-1
+  while (lo + 1 < hi) {
+    size_t mid = lo + ((hi - lo) >> 1);
+    if (ProbeDeviceReadableByte(ptr + (mid - 1))) {
+      lo = mid;
+    } else {
+      hi = mid;
+    }
+  }
+
+  fprintf(stderr,
+          "[GDR-DEBUG-LEN] %s key=%llu clip by cuda probe: len %zu -> %zu "
+          "(ptr=%p)\n",
+          tag, (unsigned long long)key, len, lo, ptr);
+  fflush(stderr);
+  return lo;
+}
+
+}  // namespace
+
 void FinishOrProceed(std::shared_ptr<TensorTableEntry> task) {
-  auto &queue_list = task->queue_list;
+  auto& queue_list = task->queue_list;
   BPS_CHECK_GE(queue_list.size(), 1);
   auto this_op = queue_list[0];
   auto q = BytePSGlobal::GetScheduledQueue(this_op);
@@ -42,21 +168,20 @@ void FinishOrProceed(std::shared_ptr<TensorTableEntry> task) {
     if (task->device == CPU_DEVICE_ID) {
       BPS_LOG(DEBUG) << "Sampled key=" << task->key
                      << " rank=" << BytePSGlobal::GetLocalRank()
-                     << " input[0]=" << *((float *)(task->tensor->data()) + i)
-                     << "\tinput[-1]=" << *((float *)(task->tensor->data()) + j)
-                     << "\toutput[0]=" << *((float *)(task->output->data()) + i)
-                     << "\toutput[-1]="
-                     << *((float *)(task->output->data()) + j)
+                     << " input[0]=" << *((float*)(task->tensor->data()) + i)
+                     << "\tinput[-1]=" << *((float*)(task->tensor->data()) + j)
+                     << "\toutput[0]=" << *((float*)(task->output->data()) + i)
+                     << "\toutput[-1]=" << *((float*)(task->output->data()) + j)
                      << "\t after stage: " << LogStrings[this_op];
     } else {
       float i0, i1, o0, o1;
-      cudaMemcpy(&i0, (float *)(task->tensor->data()) + i, 4,
+      cudaMemcpy(&i0, (float*)(task->tensor->data()) + i, 4,
                  cudaMemcpyDeviceToHost);
-      cudaMemcpy(&i1, (float *)(task->tensor->data()) + j, 4,
+      cudaMemcpy(&i1, (float*)(task->tensor->data()) + j, 4,
                  cudaMemcpyDeviceToHost);
-      cudaMemcpy(&o0, (float *)(task->output->data()) + i, 4,
+      cudaMemcpy(&o0, (float*)(task->output->data()) + i, 4,
                  cudaMemcpyDeviceToHost);
-      cudaMemcpy(&o1, (float *)(task->output->data()) + j, 4,
+      cudaMemcpy(&o1, (float*)(task->output->data()) + j, 4,
                  cudaMemcpyDeviceToHost);
       BPS_LOG(DEBUG) << "Sampled key=" << task->key
                      << " rank=" << BytePSGlobal::GetLocalRank()
@@ -199,9 +324,9 @@ inline void PostNcclCalls(
   auto len = task->len;
   auto offset = task->offset;
   auto unit_len = tensor->size() / tensor->shape().num_elements();
-  auto p = (char *)(tensor->data()) + offset;
+  auto p = (char*)(tensor->data()) + offset;
   if (task->device == CPU_DEVICE_ID) {
-    p = (char *)(task->gpu_ptr) + offset;
+    p = (char*)(task->gpu_ptr) + offset;
   }
 
   auto nccl_dtype = getNcclDataType(tensor->dtype());
@@ -231,22 +356,22 @@ inline void PostNcclCalls(
 
   if (this_op == REDUCE) {
     // We reduce to task->output except that it is a CPU tensor
-    auto out_p = (char *)(task->output->data()) + offset;
+    auto out_p = (char*)(task->output->data()) + offset;
     if (task->device == CPU_DEVICE_ID && task->tensor == task->output) {
       out_p = p;
     }
 
     if (num_elem_per_gpu) {
       NCCLCHECK(ncclReduceScatter(
-          (const void *)p,
-          (void *)(out_p + nccl_rank * num_elem_per_gpu * unit_len),
+          (const void*)p,
+          (void*)(out_p + nccl_rank * num_elem_per_gpu * unit_len),
           (size_t)num_elem_per_gpu, (ncclDataType_t)nccl_dtype,
           (ncclRedOp_t)ncclSum, (ncclComm_t)nccl_comm,
           (cudaStream_t)nccl_stream));
     }
     if (left_elem) {
-      NCCLCHECK(ncclReduce((const void *)(p + len - left_elem * unit_len),
-                           (void *)(out_p + len - left_elem * unit_len),
+      NCCLCHECK(ncclReduce((const void*)(p + len - left_elem * unit_len),
+                           (void*)(out_p + len - left_elem * unit_len),
                            (size_t)left_elem, (ncclDataType_t)nccl_dtype,
                            (ncclRedOp_t)ncclSum, (int)nccl_root,
                            (ncclComm_t)nccl_comm, (cudaStream_t)nccl_stream));
@@ -254,13 +379,13 @@ inline void PostNcclCalls(
   } else {
     if (num_elem_per_gpu) {
       NCCLCHECK(ncclAllGather(
-          (const void *)(p + nccl_rank * num_elem_per_gpu * unit_len),
-          (void *)p, (size_t)num_elem_per_gpu, (ncclDataType_t)nccl_dtype,
+          (const void*)(p + nccl_rank * num_elem_per_gpu * unit_len), (void*)p,
+          (size_t)num_elem_per_gpu, (ncclDataType_t)nccl_dtype,
           (ncclComm_t)nccl_comm, (cudaStream_t)nccl_stream));
     }
     if (left_elem) {
-      NCCLCHECK(ncclBroadcast((const void *)(p + len - left_elem * unit_len),
-                              (void *)(p + len - left_elem * unit_len),
+      NCCLCHECK(ncclBroadcast((const void*)(p + len - left_elem * unit_len),
+                              (void*)(p + len - left_elem * unit_len),
                               (size_t)left_elem, (ncclDataType_t)nccl_dtype,
                               (int)nccl_root, (ncclComm_t)nccl_comm,
                               (cudaStream_t)nccl_stream));
@@ -278,8 +403,8 @@ bool RunRootNcclLoopOnce() {
   QueueType nccl_ops[] = {REDUCE, BROADCAST};
 
   auto nccl_entry = std::make_shared<NcclGroupEntry>();
-  auto &tasks = nccl_entry->tasks;
-  auto &queues = nccl_entry->queues;
+  auto& tasks = nccl_entry->tasks;
+  auto& queues = nccl_entry->queues;
 
   NCCLCHECK(ncclGroupStart());
   for (auto this_op : nccl_ops) {
@@ -323,8 +448,8 @@ bool RunNonRootNcclLoopOnce() {
   BPS_CHECK_NE(rank, root);
 
   auto nccl_entry = std::make_shared<NcclGroupEntry>();
-  auto &tasks = nccl_entry->tasks;
-  auto &queues = nccl_entry->queues;
+  auto& tasks = nccl_entry->tasks;
+  auto& queues = nccl_entry->queues;
   struct BytePSCommMsg msg = {};
 
   NCCLCHECK(ncclGroupStart());
@@ -395,19 +520,19 @@ bool RunCopyDevice2HostLoopOnce() {
 
     auto len = task->len;
     auto offset = task->offset;
-    auto p = (char *)(tensor->data()) + offset;
+    auto p = (char*)(tensor->data()) + offset;
     if (task->device == CPU_DEVICE_ID) {
-      p = (char *)(task->gpu_ptr) + offset;
+      p = (char*)(task->gpu_ptr) + offset;
     }
     auto unit_len = tensor->size() / tensor->shape().num_elements();
-    char *cpubuff;
+    char* cpubuff;
     if (BytePSGlobal::IsCrossPcieSwitch()) {
       BPS_CHECK(task->pcie_cpubuff.size());
       cpubuff =
-          (char *)(task->pcie_cpubuff[BytePSGlobal::GetPcieSwitchIndex()]) +
+          (char*)(task->pcie_cpubuff[BytePSGlobal::GetPcieSwitchIndex()]) +
           offset;
     } else {
-      cpubuff = (char *)(task->cpubuff) + offset;
+      cpubuff = (char*)(task->cpubuff) + offset;
     }
 
     BPS_CHECK(cpubuff) << task->tensor_name
@@ -429,7 +554,7 @@ bool RunCopyDevice2HostLoopOnce() {
 
     if (copy_len) {
       CUDA_CALL(cudaMemcpyAsync(
-          (void *)(cpubuff + copy_offset), (const void *)(p + copy_offset),
+          (void*)(cpubuff + copy_offset), (const void*)(p + copy_offset),
           (size_t)copy_len, (cudaMemcpyKind)cudaMemcpyDeviceToHost,
           (cudaStream_t)*copy_d2h_Stream));
       CUDA_CALL(cudaStreamSynchronize(*copy_d2h_Stream));
@@ -482,8 +607,8 @@ bool RunPcieReduceLoopOnce() {
 
         // Below we assume there are only two PCIe switch
         // and we run reducer in the context of the second switch
-        reducer->sum((void *)((char *)(task->cpubuff) + total_offset),
-                     (void *)((char *)(task->pcie_cpubuff[0]) + total_offset),
+        reducer->sum((void*)((char*)(task->cpubuff) + total_offset),
+                     (void*)((char*)(task->pcie_cpubuff[0]) + total_offset),
                      copy_len, tensor->dtype());
       }
     }
@@ -507,8 +632,8 @@ bool RunCompressLoopOnce() {
 
     // spawn
     BytePSGlobal::GetThreadPool()->enqueue([task]() {
-      char *data = const_cast<char *>(static_cast<const char *>(task->cpubuff) +
-                                      task->offset);
+      char* data = const_cast<char*>(static_cast<const char*>(task->cpubuff) +
+                                     task->offset);
       int len = task->len;
       int dtype = task->tensor->dtype();
       compressor::tensor_t grad(data, len, dtype);
@@ -521,7 +646,7 @@ bool RunCompressLoopOnce() {
       task->compressed = std::make_shared<decltype(compressed)>(compressed);
 
       // restore rt
-      auto &queue_list = task->queue_list;
+      auto& queue_list = task->queue_list;
       BytePSGlobal::GetScheduledQueue(queue_list[1])
           ->reset(task->key, BytePSGlobal::GetLocalSize() - 1);
 
@@ -547,10 +672,10 @@ bool RunPushLoopOnce() {
       auto offset = task->offset;
       auto len = task->len;
 
-      char *data;
+      char* data;
       BPS_CHECK(task->cpubuff);
       data =
-          const_cast<char *>(static_cast<const char *>(task->cpubuff) + offset);
+          const_cast<char*>(static_cast<const char*>(task->cpubuff) + offset);
 
       // get metadata
       const int dtype = task->tensor->dtype();
@@ -567,7 +692,7 @@ bool RunPushLoopOnce() {
       ps::SArray<char> vals(data, len, false);
 
       int cmd = GetCommandType(RequestType::kDefaultPushPull, dtype);
-      auto &pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
+      auto& pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
       BytePSGlobal::GetPS()->ZPush(pskv.keys, vals, pskv.lens, cmd,
                                    [task, q]() { FinishOrProceed(task); });
     } else {
@@ -581,38 +706,111 @@ bool RunPushLoopOnce() {
   return true;
 }
 
-bool RunGDRPushLoopOnce(){
+bool RunGDRPushLoopOnce() {
   QueueType this_op = PUSH;
   auto q = BytePSGlobal::GetScheduledQueue(this_op);
   auto task = q->getTask();
   if (task) {
     BPS_CHECK(BytePSGlobal::IsRootDevice())
         << "only root device should enter PUSH loop";
-    auto tensor=task->tensor;
+    auto tensor = task->tensor;
     if (BytePSGlobal::IsDistributed()) {
-      auto offset = task->offset;
-      auto len = task->len;
+      bool gdr_debug = IsRdmaMrDebugEnabled();
+      size_t offset = static_cast<size_t>(task->offset);
+      size_t len = static_cast<size_t>(task->len);
+      auto orig_len = len;
+      auto tensor_size = tensor ? tensor->size() : 0;
 
-      char *data;
-      // BPS_CHECK(task->cpubuff);
-      if(task->cpubuff){
-        data =
-          const_cast<char *>(static_cast<const char *>(task->cpubuff) + offset);
-      }else{
-        data =
-           const_cast<char *>(static_cast<const char *> ( (char*)(tensor->data()) + offset ) );
+      if (tensor_size > 0) {
+        if (offset >= tensor_size) {
+          if (gdr_debug) {
+            fprintf(stderr,
+                    "[GDR-DEBUG-LEN] PUSH key=%llu invalid offset=%zu "
+                    "tensor_size=%zu\n",
+                    (unsigned long long)task->key, (size_t)offset,
+                    (size_t)tensor_size);
+            fflush(stderr);
+          }
+          BPS_CHECK_LT(offset, tensor_size);
+        }
+        if (len > tensor_size - offset) {
+          auto clipped = tensor_size - offset;
+          if (gdr_debug) {
+            fprintf(stderr,
+                    "[GDR-DEBUG-LEN] PUSH key=%llu clip len from %zu to %zu "
+                    "(offset=%zu tensor_size=%zu)\n",
+                    (unsigned long long)task->key, (size_t)len,
+                    (size_t)clipped, (size_t)offset, (size_t)tensor_size);
+            fflush(stderr);
+          }
+          len = clipped;
+        }
       }
-      
+
+      if (gdr_debug) {
+        fprintf(stderr,
+                "[GDR-DEBUG-PUSH] key=%llu task->device=%d task->gpu_ptr=%p "
+                "task->cpubuff=%p tensor->data()=%p offset=%lu len=%zu "
+                "tensor_size=%zu\n",
+                (unsigned long long)task->key, task->device, task->gpu_ptr,
+                task->cpubuff, tensor->data(), (unsigned long)offset, len,
+                (size_t)tensor_size);
+        fflush(stderr);
+      }
+
+      char* data;
+      if (task->device == CPU_DEVICE_ID) {
+        const void* base = task->cpubuff ? task->cpubuff : tensor->data();
+        data = const_cast<char*>(static_cast<const char*>(base) + offset);
+        if (gdr_debug) {
+          fprintf(stderr,
+                  "[GDR-DEBUG-PUSH] CPU device: base=%p (%s), data=%p\n",
+                  base, task->cpubuff ? "cpubuff" : "tensor->data()", data);
+          fflush(stderr);
+        }
+      } else {
+        const void* base = task->gpu_ptr ? task->gpu_ptr : tensor->data();
+        data = const_cast<char*>(static_cast<const char*>(base) + offset);
+        if (gdr_debug) {
+          fprintf(stderr,
+                  "[GDR-DEBUG-PUSH] GPU device: base=%p (%s), data=%p\n",
+                  base, task->gpu_ptr ? "gpu_ptr" : "tensor->data()", data);
+          fflush(stderr);
+        }
+      }
+
+      if (gdr_debug) {
+        fprintf(stderr, "[GDR-DEBUG-PUSH] Final data address: %p\n",
+                (void*)data);
+        fflush(stderr);
+      }
+      if (task->device != CPU_DEVICE_ID) {
+        len = ClampLenByCudaAddressRange("PUSH", task->key, data, len);
+        if (IsGdrLenProbeEnabled()) {
+          len = ClampLenByCudaReadableProbe("PUSH", task->key, data, len);
+        }
+        BPS_CHECK_GT(len, 0) << "PUSH key=" << task->key
+                             << " clamped length to zero for ptr=" << (void*)data;
+      }
 
       // get metadata
       const int dtype = task->tensor->dtype();
-
+      int cmd = GetCommandType(RequestType::kDefaultPushPull, dtype);
+      auto& pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
+      if (pskv.size > 0 && pskv.size != len) {
+        if (gdr_debug) {
+          fprintf(stderr,
+                  "[GDR-DEBUG-LEN] PUSH key=%llu adjust len from %zu to %zu\n",
+                  (unsigned long long)task->key, (size_t)orig_len,
+                  (size_t)pskv.size);
+          fflush(stderr);
+        }
+        len = pskv.size;
+      }
 
       // false means not to delete data when SArray is deleted
       ps::SArray<char> vals(data, len, false);
 
-      int cmd = GetCommandType(RequestType::kDefaultPushPull, dtype);
-      auto &pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
       BytePSGlobal::GetPS()->ZPush(pskv.keys, vals, pskv.lens, cmd,
                                    [task, q]() { FinishOrProceed(task); });
     } else {
@@ -625,7 +823,6 @@ bool RunGDRPushLoopOnce(){
   }
   return true;
 }
-
 
 bool RunGDRPullLoopOnce() {
   QueueType this_op = PULL;
@@ -634,27 +831,106 @@ bool RunGDRPullLoopOnce() {
   if (task) {
     BPS_CHECK(BytePSGlobal::IsRootDevice())
         << "only root device should enter PULL loop";
-    auto tensor=task->tensor;
+    auto tensor = task->tensor;
+    auto output = task->output;
     // TODO: allow merging
-    auto offset = task->offset;
-    auto len = task->len;
-    
-    char *data;
-    if(task->cpubuff){
-      data =
-        const_cast<char *>(static_cast<const char *>(task->cpubuff) + offset);
-    }else{
-      data =
-        const_cast<char *>(static_cast<const char *> ( (char*)(tensor->data()) + offset ) );
+    bool gdr_debug = IsRdmaMrDebugEnabled();
+    size_t offset = static_cast<size_t>(task->offset);
+    size_t len = static_cast<size_t>(task->len);
+    auto orig_len = len;
+    auto tensor_size = output ? output->size() : (tensor ? tensor->size() : 0);
+
+    if (tensor_size > 0) {
+      if (offset >= tensor_size) {
+        if (gdr_debug) {
+          fprintf(stderr,
+                  "[GDR-DEBUG-LEN] PULL key=%llu invalid offset=%zu "
+                  "tensor_size=%zu\n",
+                  (unsigned long long)task->key, (size_t)offset,
+                  (size_t)tensor_size);
+          fflush(stderr);
+        }
+        BPS_CHECK_LT(offset, tensor_size);
+      }
+      if (len > tensor_size - offset) {
+        auto clipped = tensor_size - offset;
+        if (gdr_debug) {
+          fprintf(stderr,
+                  "[GDR-DEBUG-LEN] PULL key=%llu clip len from %zu to %zu "
+                  "(offset=%zu tensor_size=%zu)\n",
+                  (unsigned long long)task->key, (size_t)len,
+                  (size_t)clipped, (size_t)offset, (size_t)tensor_size);
+          fflush(stderr);
+        }
+        len = clipped;
+      }
     }
+
+    if (gdr_debug) {
+      fprintf(stderr,
+              "[GDR-DEBUG-PULL] key=%llu task->device=%d task->gpu_ptr=%p "
+              "task->cpubuff=%p tensor->data()=%p output->data()=%p "
+              "offset=%lu len=%zu tensor_size=%zu\n",
+              (unsigned long long)task->key, task->device, task->gpu_ptr,
+              task->cpubuff, tensor->data(), output ? output->data() : nullptr,
+              (unsigned long)offset, len, (size_t)tensor_size);
+      fflush(stderr);
+    }
+
+    char* data;
+    if (task->device == CPU_DEVICE_ID) {
+      const void* base = task->cpubuff
+                             ? task->cpubuff
+                             : (output ? output->data() : tensor->data());
+      data = const_cast<char*>(static_cast<const char*>(base) + offset);
+      if (gdr_debug) {
+        fprintf(stderr, "[GDR-DEBUG-PULL] CPU device: base=%p, data=%p\n",
+                base, data);
+        fflush(stderr);
+      }
+    } else {
+      const void* base = output
+                             ? output->data()
+                             : (task->gpu_ptr ? task->gpu_ptr : tensor->data());
+      data = const_cast<char*>(static_cast<const char*>(base) + offset);
+      if (gdr_debug) {
+        fprintf(stderr, "[GDR-DEBUG-PULL] GPU device: base=%p, data=%p\n",
+                base, data);
+        fflush(stderr);
+      }
+    }
+
+    if (gdr_debug) {
+      fprintf(stderr, "[GDR-DEBUG-PULL] Final data address: %p\n", (void*)data);
+      fflush(stderr);
+    }
+    if (task->device != CPU_DEVICE_ID) {
+      len = ClampLenByCudaAddressRange("PULL", task->key, data, len);
+      if (IsGdrLenProbeEnabled()) {
+        len = ClampLenByCudaReadableProbe("PULL", task->key, data, len);
+      }
+      BPS_CHECK_GT(len, 0) << "PULL key=" << task->key
+                           << " clamped length to zero for ptr=" << (void*)data;
+    }
+
     // get metadata
-    const int dtype = task->output->dtype();
+    const int dtype = output ? output->dtype() : tensor->dtype();
+    int cmd = GetCommandType(RequestType::kDefaultPushPull, dtype);
+    auto& pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
+    if (pskv.size > 0 && pskv.size != len) {
+      if (gdr_debug) {
+        fprintf(stderr,
+                "[GDR-DEBUG-LEN] PULL key=%llu adjust len from %zu to %zu\n",
+                (unsigned long long)task->key, (size_t)orig_len,
+                (size_t)pskv.size);
+        fflush(stderr);
+      }
+      len = pskv.size;
+    }
 
     // false means not to delete data when SArray is deleted
     auto vals = new ps::SArray<char>(data, len, false);
 
-    int cmd = GetCommandType(RequestType::kDefaultPushPull, dtype);
-    auto &pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
     // issue pull
     BytePSGlobal::GetPS()->ZPull(pskv.keys, vals, &pskv.lens, cmd,
                                  [vals, task, q]() {
@@ -678,10 +954,9 @@ bool RunPullLoopOnce() {
     auto offset = task->offset;
     auto len = task->len;
 
-    char *data;
+    char* data;
     BPS_CHECK(task->cpubuff);
-    data =
-        const_cast<char *>(static_cast<const char *>(task->cpubuff) + offset);
+    data = const_cast<char*>(static_cast<const char*>(task->cpubuff) + offset);
 
     // get metadata
     const int dtype = task->output->dtype();
@@ -690,7 +965,7 @@ bool RunPullLoopOnce() {
     auto vals = new ps::SArray<char>(data, len, false);
 
     int cmd = GetCommandType(RequestType::kDefaultPushPull, dtype);
-    auto &pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
+    auto& pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
     // issue pull
     BytePSGlobal::GetPS()->ZPull(pskv.keys, vals, &pskv.lens, cmd,
                                  [vals, task, q]() {
@@ -714,9 +989,9 @@ bool RunDecompressLoopOnce() {
 
     // spawn
     BytePSGlobal::GetThreadPool()->enqueue([task]() {
-      char *data = const_cast<char *>(static_cast<const char *>(task->cpubuff) +
-                                      task->offset);
-      auto &pskv = BytePSGlobal::EncodeDefaultKey(task->key, 0);
+      char* data = const_cast<char*>(static_cast<const char*>(task->cpubuff) +
+                                     task->offset);
+      auto& pskv = BytePSGlobal::EncodeDefaultKey(task->key, 0);
       auto len = pskv.lens[0];
       int dtype = task->tensor->dtype();
       compressor::tensor_t compressed(data, len, dtype);
@@ -744,13 +1019,13 @@ void CopyHost2Device(std::shared_ptr<byteps::common::TensorTableEntry> task) {
   auto nccl_rank = nccl->GetRank(key, BROADCAST);
   auto len = task->len;
   auto offset = task->offset;
-  auto cpubuff = (char *)(task->cpubuff) + offset;
+  auto cpubuff = (char*)(task->cpubuff) + offset;
   BPS_CHECK(cpubuff) << task->tensor_name
                      << ": CPU buffer not initialized, size=" << len;
 
-  auto gpu_addr = (char *)(tensor->data()) + offset;
+  auto gpu_addr = (char*)(tensor->data()) + offset;
   if (task->device == CPU_DEVICE_ID) {
-    gpu_addr = (char *)(task->gpu_ptr) + offset;
+    gpu_addr = (char*)(task->gpu_ptr) + offset;
   }
 
   auto unit_len = tensor->size() / tensor->shape().num_elements();
@@ -770,7 +1045,7 @@ void CopyHost2Device(std::shared_ptr<byteps::common::TensorTableEntry> task) {
 
   if (copy_len) {
     CUDA_CALL(cudaMemcpyAsync(
-        (void *)(gpu_addr + copy_offset), (const void *)(cpubuff + copy_offset),
+        (void*)(gpu_addr + copy_offset), (const void*)(cpubuff + copy_offset),
         (size_t)copy_len, (cudaMemcpyKind)cudaMemcpyHostToDevice,
         (cudaStream_t)*copy_h2d_stream));
     CUDA_CALL(cudaStreamSynchronize(*copy_h2d_stream));
@@ -906,13 +1181,13 @@ void PushLoop() {
   BytePSGlobal::ReportThreadFinish();
 }
 
-void PushLoopGDR(){
+void PushLoopGDR() {
   while (RunGDRPushLoopOnce() && !BytePSGlobal::ShouldShutdown()) {
   }
   BytePSGlobal::ReportThreadFinish();
 }
 
-void PullLoopGDR(){
+void PullLoopGDR() {
   while (RunGDRPullLoopOnce() && !BytePSGlobal::ShouldShutdown()) {
   }
   BytePSGlobal::ReportThreadFinish();

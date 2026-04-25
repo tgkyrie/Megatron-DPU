@@ -16,6 +16,7 @@
 #include <malloc.h>
 #include <numa.h>
 
+#include <numeric>
 #include <sstream>
 
 #include "compressor/compressor.h"
@@ -40,7 +41,7 @@ bool BytePSGlobal::_is_root_device;
 bool BytePSGlobal::_use_gdr = false;
 bool BytePSGlobal::_is_distributed_job;
 bool BytePSGlobal::_is_cross_pcie_switch;
-uint32_t BytePSGlobal::_partition_bytes = 4096000;
+uint32_t BytePSGlobal::_partition_bytes = 4194304;
 uint32_t BytePSGlobal::_min_compress_bytes = (1 << 16);
 int BytePSGlobal::_push_thread=1;
 
@@ -143,9 +144,16 @@ void BytePSGlobal::Init() {
   }
   _pagesize = sysconf(_SC_PAGESIZE);
   BPS_CHECK_GT(_pagesize, 0);
-  _partition_bytes = RoundUp(_partition_bytes, _local_size * _pagesize);
+  size_t partition_align = static_cast<size_t>(_local_size) * _pagesize;
+  if (_use_gdr) {
+    // GDR路径下采用至少64KB粒度，避免4096000这类半页步进触发不稳定注册。
+    constexpr size_t kGdrAlign = 64UL * 1024UL;
+    partition_align = std::lcm(partition_align, kGdrAlign);
+  }
+  _partition_bytes = RoundUp(_partition_bytes, partition_align);
   BPS_LOG(DEBUG) << "Partition size round up to " << _partition_bytes
-                 << " (bytes)";
+                 << " (bytes), align=" << partition_align
+                 << (_use_gdr ? " [GDR]" : "");
 
   BPS_CHECK(getenv("DMLC_NUM_WORKER")) << "error: env DMLC_NUM_WORKER not set";
   _num_worker = atoi(getenv("DMLC_NUM_WORKER"));
