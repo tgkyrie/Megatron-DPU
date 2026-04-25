@@ -23,7 +23,7 @@ endif
 
 INCPATH = -I./src -I./include -I$(DEPS_PATH)/include
 CFLAGS = -std=c++17 -msse2 -fPIC -O3 -ggdb -Wall -finline-functions $(INCPATH) $(ADD_CFLAGS)
-LIBS = -pthread -lrt
+LIBS = -pthread -lrt -ldl
 
 ifeq ($(USE_CUDA), 1)
 LIBS += -lcudart -L$(CUDA_HOME)/lib64

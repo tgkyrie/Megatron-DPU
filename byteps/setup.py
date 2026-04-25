@@ -257,6 +257,9 @@ def with_pytorch():
 def without_pytorch():
     return int(os.environ.get('BYTEPS_WITHOUT_PYTORCH', 0))
 
+def is_server_only_build():
+    return int(os.environ.get('BYTEPS_SERVER_ONLY', 0)) != 0
+
 def should_build_ucx():
     has_prebuilt_ucx = os.environ.get('BYTEPS_UCX_HOME', '')
     return use_ucx() and not has_prebuilt_ucx
@@ -318,6 +321,8 @@ def get_common_options(build_ext):
 
     # RDMA and NUMA libs
     LIBRARIES += ['numa']
+    if sys.platform != 'darwin':
+        LIBRARIES += ['dl']
 
     # auto-detect rdma
     if has_rdma_header():
@@ -330,8 +335,12 @@ def get_common_options(build_ext):
             LIBRARY_DIRS += [f'{ucx_home}/lib']
 
     # ps-lite
-    EXTRA_OBJECTS = ['3rdparty/ps-lite/build/libps.a',
-                     '3rdparty/ps-lite/deps/lib/libzmq.a']
+    if is_server_only_build():
+        EXTRA_OBJECTS = ['3rdparty/ps-lite/build/libps.a']
+        LIBRARIES += ['zmq']
+    else:
+        EXTRA_OBJECTS = ['3rdparty/ps-lite/build/libps.a',
+                         '3rdparty/ps-lite/deps/lib/libzmq.a']
 
     return dict(MACROS=MACROS,
                 INCLUDES=INCLUDES,
@@ -362,14 +371,18 @@ def build_server(build_ext, options):
     server_lib.extra_link_args = options['LINK_FLAGS']
     server_lib.extra_objects = options['EXTRA_OBJECTS']
     server_lib.library_dirs = options['LIBRARY_DIRS']
+    server_lib.libraries = [lib for lib in options['LIBRARIES']
+                            if lib not in ('nccl', 'nccl_static')]
 
     # auto-detect rdma
     if has_rdma_header():
-        server_lib.libraries = ['rdmacm', 'ibverbs', 'rt']
-    else:
-        server_lib.libraries = []
+        for lib in ('rdmacm', 'ibverbs', 'rt'):
+            if lib not in server_lib.libraries:
+                server_lib.libraries.append(lib)
     if use_ucx():
-        server_lib.libraries += ['ucp', 'uct', 'ucs', 'ucm']
+        for lib in ('ucp', 'uct', 'ucs', 'ucm'):
+            if lib not in server_lib.libraries:
+                server_lib.libraries.append(lib)
         ucx_home = get_ucx_home()
         if ucx_home:
             server_lib.include_dirs += [f'{ucx_home}/include']
@@ -673,6 +686,25 @@ def get_cuda_dirs(build_ext, cpp_flags):
     return cuda_include_dirs, cuda_lib_dirs
 
 
+def is_force_no_cuda():
+    return int(os.environ.get('BYTEPS_FORCE_NO_CUDA', 0)) != 0
+
+
+def should_build_ps_lite_with_cuda():
+    if is_force_no_cuda():
+        print('INFO: BYTEPS_FORCE_NO_CUDA=1, ps-lite will be built without USE_CUDA.')
+        return False
+
+    cuda_home = os.environ.get('BYTEPS_CUDA_HOME', '/usr/local/cuda')
+    cuda_runtime_h = os.path.join(cuda_home, 'include', 'cuda_runtime.h')
+    if os.path.exists(cuda_runtime_h):
+        return True
+
+    print('INFO: CUDA toolkit not found at {}, ps-lite will be built without USE_CUDA.'
+          .format(cuda_home))
+    return False
+
+
 def get_nccl_vals():
     nccl_include_dirs = []
     nccl_lib_dirs = []
@@ -964,7 +996,22 @@ class custom_build_ext(build_ext):
             except:
                 pass
 
-        if not os.path.exists("3rdparty/ps-lite/build/libps.a") or \
+        force_rebuild_ps_lite = is_force_no_cuda() or \
+            int(os.environ.get('BYTEPS_FORCE_REBUILD_PS_LITE', 0)) != 0
+        if force_rebuild_ps_lite:
+            clean_process = subprocess.Popen('make clean',
+                                             cwd='3rdparty/ps-lite',
+                                             stdout=sys.stdout,
+                                             stderr=sys.stderr,
+                                             shell=True)
+            clean_process.communicate()
+            if clean_process.returncode:
+                raise DistutilsSetupError('An ERROR occured while cleaning the '
+                                          'ps-lite library. Exit code: {0}'
+                                          .format(clean_process.returncode))
+
+        if force_rebuild_ps_lite or \
+           not os.path.exists("3rdparty/ps-lite/build/libps.a") or \
            not os.path.exists("3rdparty/ps-lite/deps/lib"):
             print("should_build_ucx is", should_build_ucx())
             if should_build_ucx():
@@ -974,6 +1021,10 @@ class custom_build_ext(build_ext):
                 make_option += "-j "
             if has_rdma_header():
                 make_option += "USE_RDMA=1 "
+            if should_build_ps_lite_with_cuda():
+                cuda_home = os.environ.get('BYTEPS_CUDA_HOME', '/usr/local/cuda')
+                make_option += 'USE_CUDA=1 '
+                make_option += 'CUDA_HOME={} '.format(cuda_home)
             if use_ucx():
                 make_option += 'USE_UCX=1 '
                 if ucx_home:
@@ -986,7 +1037,9 @@ class custom_build_ext(build_ext):
                 zmq_tarball_path = os.path.join(here, './zeromq-4.1.4.tar.gz')
                 # make_option += " WGET='curl -O '  ZMQ_URL=file://" + zmq_tarball_path + " "
 
-            make_process = subprocess.Popen('make ' + make_option,
+            make_cmd = 'make ps ' + make_option if is_server_only_build() \
+                else 'make ' + make_option
+            make_process = subprocess.Popen(make_cmd,
                                             cwd='3rdparty/ps-lite',
                                             stdout=sys.stdout,
                                             stderr=sys.stderr,
@@ -1007,6 +1060,10 @@ class custom_build_ext(build_ext):
         except:
             raise DistutilsSetupError('An ERROR occured while building the server module.\n\n'
                                       '%s' % traceback.format_exc())
+
+        if is_server_only_build():
+            print('INFO: BYTEPS_SERVER_ONLY=1; server built; skip TF/Torch/MXNet plugins')
+            return
 
         # If PyTorch is installed, it must be imported before others, otherwise
         # we may get an error: dlopen: cannot load any more object with static TLS
