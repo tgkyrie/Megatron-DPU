@@ -29,6 +29,7 @@ namespace common {
 class NcclGroupEntry {
  public:
   void RecordEvents();
+  bool Ready();
   void SynchronizeEvents();
   void DestroyEvents();
 

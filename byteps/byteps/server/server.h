@@ -19,7 +19,10 @@
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
+#include <atomic>
+#include <memory>
 #include <set>
+#include <unordered_map>
 #include <unistd.h>
 #include "ps/ps.h"
 #include "../common/cpu_reducer.h"
@@ -55,9 +58,9 @@ struct DataHandleType {
 };
 
 struct BytePSArray {
-  char* tensor;
-  size_t len;
-  int dtype;
+  char* tensor = nullptr;
+  size_t len = 0;
+  int dtype = 0;
   ps::KVPairs<char> tmp_sarray;
 };
 
@@ -66,10 +69,27 @@ struct UpdateBuf {
   BytePSArray merged;
 };
 
+struct KeyState {
+  std::mutex mu;
+  int expected_workers = -1;
+  BytePSArray store;
+  UpdateBuf update;
+  bool has_push_response = false;
+  ps::KVPairs<char> push_response;
+  bool has_pull_response = false;
+  ps::KVPairs<char> pull_response;
+  std::unique_ptr<common::compressor::Compressor> compressor;
+  bool is_push_finished = false;
+  std::vector<ps::KVMeta> q_pull_reqmeta;
+  std::set<int> seen_sender;
+  size_t pull_cnt = 0;
+};
+
 struct BytePSEngineMessage {
   uint64_t id;
   DataHandleType type;
   uint64_t key;
+  std::shared_ptr<KeyState> state;
   void* dst;
   void* src;
   size_t len;
@@ -95,28 +115,11 @@ static DataHandleType DepairDataHandleType(int cmd) {
 KVServer<SERVER_DATA_TYPE>* byteps_server_;
 byteps::common::CpuReducer* bps_reducer_;
 
-std::mutex pullresp_mu_;
-std::unordered_map<uint64_t, ps::KVPairs<char> > push_response_map_;
-std::unordered_map<uint64_t, ps::KVPairs<char> > pull_response_map_;
-std::mutex expected_workers_mu_;
-std::unordered_map<uint64_t, int> expected_workers_by_key_;
-
-// push & pull flag
-std::vector<std::mutex> flag_mu_;
-std::vector<std::unordered_map<uint64_t, bool> > is_push_finished_;
-std::vector<std::unordered_map<uint64_t, std::vector<ps::KVMeta> > > q_pull_reqmeta_;
-std::vector<std::unordered_map<uint64_t, std::set<int> > > seen_sender_;
-std::vector<std::unordered_map<uint64_t, size_t> > pull_cnt_;
+std::mutex key_states_mu_;
+std::unordered_map<uint64_t, std::shared_ptr<KeyState> > key_states_;
 
 // byteps handler
 std::mutex handle_mu_;
-std::mutex update_buf_mu_;
-std::unordered_map<uint64_t, UpdateBuf> update_buf_;
-std::unordered_map<uint64_t, std::unique_ptr<common::compressor::Compressor>> compressor_map_;
-
-// address map
-std::mutex store_mu_;
-std::unordered_map<uint64_t, BytePSArray> store_;
 
 // hash function
 std::mutex hash_mu_;
@@ -124,7 +127,7 @@ std::unordered_map<uint64_t, size_t> hash_cache_;
 std::vector<uint64_t> acc_load_; // accumulated tensor size for an engine thread
 
 // global knob
-uint64_t timestamp_ = 0;
+std::atomic<uint64_t> timestamp_{0};
 size_t engine_thread_num_ = 4;
 volatile bool is_engine_blocking_ = false;
 volatile bool record_event_ = false;
@@ -132,6 +135,7 @@ volatile bool log_key_info_ = false;
 volatile bool sync_mode_ = true;
 volatile bool debug_mode_ = false;
 volatile bool enable_schedule_ = false;
+volatile bool use_global_handler_lock_ = false;
 
 ps::Node::Role role_;
 int preferred_rank = -1;

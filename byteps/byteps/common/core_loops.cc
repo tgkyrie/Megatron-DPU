@@ -17,16 +17,37 @@
 #include <cuda_runtime.h>
 
 #include <chrono>
+#include <cstdlib>
 #include <memory>
 
 #include "common.h"
 #include "compressor/compressor.h"
 #include "core_loops.h"
+#include "cuda_ready_event.h"
 #include "global.h"
 #include "logging.h"
 
 namespace byteps {
 namespace common {
+namespace {
+
+bool IsSyncCudaCopyEnabled() {
+  static bool enabled =
+      getenv("BYTEPS_SYNC_CUDA_COPY") ? atoi(getenv("BYTEPS_SYNC_CUDA_COPY"))
+                                      : false;
+  return enabled;
+}
+
+void RecordOrSynchronizeCudaCopy(
+    const std::shared_ptr<TensorTableEntry>& task, cudaStream_t stream) {
+  if (IsSyncCudaCopyEnabled() || task->queue_list.size() <= 1) {
+    CUDA_CALL(cudaStreamSynchronize(stream));
+    return;
+  }
+  task->ready_event = RecordReadyEventOnStream(stream);
+}
+
+}  // namespace
 
 void FinishOrProceed(std::shared_ptr<TensorTableEntry> task) {
   auto &queue_list = task->queue_list;
@@ -362,7 +383,9 @@ bool RunNonRootNcclLoopOnce() {
 bool RunSyncNcclOnce() {
   auto nccl_entry = BytePSGlobal::GetNccl()->DequeueGroup();
   if (nccl_entry) {
-    nccl_entry->SynchronizeEvents();
+    if (IsSyncCudaCopyEnabled()) {
+      nccl_entry->SynchronizeEvents();
+    }
     for (size_t i = 0; i < nccl_entry->tasks.size(); i++) {
       FinishOrProceed(nccl_entry->tasks[i]);
     }
@@ -432,7 +455,7 @@ bool RunCopyDevice2HostLoopOnce() {
           (void *)(cpubuff + copy_offset), (const void *)(p + copy_offset),
           (size_t)copy_len, (cudaMemcpyKind)cudaMemcpyDeviceToHost,
           (cudaStream_t)*copy_d2h_Stream));
-      CUDA_CALL(cudaStreamSynchronize(*copy_d2h_Stream));
+      RecordOrSynchronizeCudaCopy(task, *copy_d2h_Stream);
     }
 
     FinishOrProceed(task);
@@ -773,7 +796,7 @@ void CopyHost2Device(std::shared_ptr<byteps::common::TensorTableEntry> task) {
         (void *)(gpu_addr + copy_offset), (const void *)(cpubuff + copy_offset),
         (size_t)copy_len, (cudaMemcpyKind)cudaMemcpyHostToDevice,
         (cudaStream_t)*copy_h2d_stream));
-    CUDA_CALL(cudaStreamSynchronize(*copy_h2d_stream));
+    RecordOrSynchronizeCudaCopy(task, *copy_h2d_stream);
   }
 
   return;

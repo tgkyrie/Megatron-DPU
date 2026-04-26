@@ -282,6 +282,7 @@ def get_common_options(build_ext):
     SOURCES = ['byteps/common/common.cc',
                'byteps/common/operations.cc',
                'byteps/common/core_loops.cc',
+               'byteps/common/cuda_ready_event.cc',
                'byteps/common/global.cc',
                'byteps/common/logging.cc',
                'byteps/common/communicator.cc',

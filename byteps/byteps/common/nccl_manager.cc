@@ -14,11 +14,24 @@
 // =============================================================================
 
 #include "nccl_manager.h"
+
+#include <cstdlib>
+
 #include "global.h"
 #include "logging.h"
 
 namespace byteps {
 namespace common {
+namespace {
+
+bool IsSyncCudaOpsEnabled() {
+  static bool enabled =
+      getenv("BYTEPS_SYNC_CUDA_COPY") ? atoi(getenv("BYTEPS_SYNC_CUDA_COPY"))
+                                      : false;
+  return enabled;
+}
+
+}  // namespace
 
 void NcclGroupEntry::RecordEvents() {
   for (size_t i = 0; i < tasks.size(); i++) {
@@ -30,6 +43,17 @@ void NcclGroupEntry::RecordEvents() {
                                    tasks[i]->key, queues[i]->getQueueType())));
     _events.push_back(event);
   }
+}
+
+bool NcclGroupEntry::Ready() {
+  for (size_t i = 0; i < _events.size(); i++) {
+    auto status = cudaEventQuery(_events[i]);
+    if (status == cudaErrorNotReady) {
+      return false;
+    }
+    CUDA_CALL(status);
+  }
+  return true;
 }
 
 void NcclGroupEntry::SynchronizeEvents() {
@@ -176,6 +200,9 @@ std::shared_ptr<NcclGroupEntry> NcclManager::DequeueGroup() {
     return nullptr;
   }
   auto r = _nccl_pipeline.front();
+  if (!IsSyncCudaOpsEnabled() && !r->Ready()) {
+    return nullptr;
+  }
   _nccl_pipeline.pop();
   return r;
 }
