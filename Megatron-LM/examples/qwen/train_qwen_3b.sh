@@ -29,15 +29,19 @@ export NCCL_DEBUG_FILE=${NCCL_DEBUG_FILE:-nccl_${HOSTNAME}_rank${NODE_RANK}.log}
 export NCCL_DEBUG_LEVEL=${NCCL_DEBUG_LEVEL:-TRACE}
 export USE_DPU=${USE_DPU:-0}
 export USE_OVERLAP=${USE_OVERLAP:-1}
+export TRAIN_ITERS=${TRAIN_ITERS:-10}
+export EVAL_INTERVAL=${EVAL_INTERVAL:-100}
+export EVAL_ITERS=${EVAL_ITERS:-10}
+export SEED=${SEED:-1234}
 
 # Keep GDR disabled by default unless you have
 # already validated the GDR build/runtime path.
-export DMLC_USE_GDR=${DMLC_USE_GDR:-1}
+export DMLC_USE_GDR=${DMLC_USE_GDR:-0}
 export BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH:-512}
-export BYTEPS_RDMA_START_DEPTH=${BYTEPS_RDMA_START_DEPTH:-16}
+export BYTEPS_RDMA_START_DEPTH=${BYTEPS_RDMA_START_DEPTH:-32}
 export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
 
-export BYTEPS_PARTITION_BYTES=${BYTEPS_PARTITION_BYTES:-4096000}
+export BYTEPS_PARTITION_BYTES=${BYTEPS_PARTITION_BYTES:-4194304}
 
 # Keep the current default behavior: multi-node single-GPU.
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1}
@@ -146,7 +150,7 @@ build_numactl_prefix "${NUMA_NODE}" "${CPU_LIST}"
 # Distributed setup
 ############################################
 GPUS_PER_NODE=${GPUS_PER_NODE:-1}
-NUM_NODES=${NUM_NODES:-2}
+NUM_NODES=${NUM_NODES:-8}
 MASTER_PORT=${MASTER_PORT:-19002}
 WORLD_SIZE=$((GPUS_PER_NODE * NUM_NODES))
 
@@ -227,7 +231,8 @@ MODEL_ARGS=(
     --init-method-std 0.02
 
     --log-interval 1
-    --train-iters 10
+    --train-iters "$TRAIN_ITERS"
+    --seed "$SEED"
     --no-rope-fusion
 )
 
@@ -316,8 +321,8 @@ fi
 # Logging / eval
 ############################################
 EVAL_AND_LOGGING_ARGS=(
-    --eval-iters 10
-    --eval-interval 100
+    --eval-iters "$EVAL_ITERS"
+    --eval-interval "$EVAL_INTERVAL"
     --save-interval 1000
     --log-throughput
     --ckpt-format torch_dist
@@ -343,6 +348,7 @@ CMD=(python "$PRETRAIN_SCRIPT_PATH"
 echo "[net] HCA=${PRIMARY_HCA:-unset} IF=${DMLC_INTERFACE} LOCAL_IP=${LOCAL_DETECTED_IP:-unset} MASTER_ADDR=${MASTER_ADDR} ROOT=${DMLC_PS_ROOT_URI}"
 echo "[dpu] USE_DPU=${USE_DPU}"
 echo "[overlap] USE_OVERLAP=${USE_OVERLAP}"
+echo "[run] TRAIN_ITERS=${TRAIN_ITERS} EVAL_INTERVAL=${EVAL_INTERVAL} EVAL_ITERS=${EVAL_ITERS} SEED=${SEED}"
 echo "[numa] NUMA_NODE=${NUMA_NODE} CPU_LIST='${CPU_LIST}' IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST}"
 
 "${NUMACTL_PREFIX[@]}" torchrun "${DISTRIBUTED_ARGS[@]}" bash -c '

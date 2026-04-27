@@ -6,9 +6,9 @@ set -euo pipefail
 # TP + DP BytePS validation script
 #
 # Notes:
-# 1. This script enables both TP and DP with BytePS
-# 2. DP gradient sync via --use-dpu-reduce
-# 3. TP all-reduce via --use-dpu-tp-reduce
+# 1. This script can enable both TP and DP with BytePS
+# 2. DP gradient sync via --use-dpu-reduce when USE_DPU_DP=1
+# 3. TP all-reduce via --use-dpu-tp-reduce when USE_DPU_TP=1
 # 4. All communication goes through cross-node RDMA network
 ############################################
 
@@ -28,17 +28,22 @@ export NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-COLL}
 export NCCL_DEBUG_FILE=${NCCL_DEBUG_FILE:-nccl_${HOSTNAME}_rank${NODE_RANK}.log}
 export NCCL_DEBUG_LEVEL=${NCCL_DEBUG_LEVEL:-TRACE}
 
-# Enable both DP and TP by default
-export USE_DPU_DP=${USE_DPU_DP:-1}
-export USE_DPU_TP=${USE_DPU_TP:-1}
+# Keep BytePS disabled by default for a safe baseline. Set USE_DPU_DP=1
+# and/or USE_DPU_TP=1 to enable the corresponding BytePS paths.
+export USE_DPU_DP=${USE_DPU_DP:-0}
+export USE_DPU_TP=${USE_DPU_TP:-0}
 export USE_OVERLAP=${USE_OVERLAP:-1}
+export TRAIN_ITERS=${TRAIN_ITERS:-10}
+export EVAL_INTERVAL=${EVAL_INTERVAL:-100}
+export EVAL_ITERS=${EVAL_ITERS:-10}
+export SEED=${SEED:-1234}
 
 # RDMA configuration
 export DMLC_USE_GDR=${DMLC_USE_GDR:-0}
 export BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH:-512}
-export BYTEPS_RDMA_START_DEPTH=${BYTEPS_RDMA_START_DEPTH:-16}
+export BYTEPS_RDMA_START_DEPTH=${BYTEPS_RDMA_START_DEPTH:-32}
 export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
-export BYTEPS_PARTITION_BYTES=${BYTEPS_PARTITION_BYTES:-4096000}
+export BYTEPS_PARTITION_BYTES=${BYTEPS_PARTITION_BYTES:-2097152}
 
 # Keep the current default behavior: multi-node single-GPU (GPU1)
 export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1}
@@ -147,7 +152,7 @@ build_numactl_prefix "${NUMA_NODE}" "${CPU_LIST}"
 # Distributed setup
 ############################################
 GPUS_PER_NODE=${GPUS_PER_NODE:-1}
-NUM_NODES=${NUM_NODES:-4}
+NUM_NODES=${NUM_NODES:-8}
 MASTER_PORT=${MASTER_PORT:-19002}
 WORLD_SIZE=$((GPUS_PER_NODE * NUM_NODES))
 
@@ -247,7 +252,8 @@ MODEL_ARGS=(
     --init-method-std 0.02
 
     --log-interval 1
-    --train-iters 10
+    --train-iters "$TRAIN_ITERS"
+    --seed "$SEED"
     --no-rope-fusion
 
     --tensor-model-parallel-size "$TP_SIZE"
@@ -336,8 +342,8 @@ fi
 # Logging / eval
 ############################################
 EVAL_AND_LOGGING_ARGS=(
-    --eval-iters 10
-    --eval-interval 100
+    --eval-iters "$EVAL_ITERS"
+    --eval-interval "$EVAL_INTERVAL"
     --save-interval 1000
     --log-throughput
     --ckpt-format torch_dist
@@ -364,6 +370,7 @@ echo "[parallel] WORLD_SIZE=${WORLD_SIZE} TP_SIZE=${TP_SIZE} DP_SIZE=${DP_SIZE} 
 echo "[byteps] USE_DPU_DP=${USE_DPU_DP} USE_DPU_TP=${USE_DPU_TP} DMLC_NUM_WORKER=${DMLC_NUM_WORKER} DMLC_NUM_SERVER=${DMLC_NUM_SERVER}"
 echo "[overlap] USE_OVERLAP=${USE_OVERLAP}"
 echo "[batch] MICRO_BATCH_SIZE=${MICRO_BATCH_SIZE} GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE}"
+echo "[run] TRAIN_ITERS=${TRAIN_ITERS} EVAL_INTERVAL=${EVAL_INTERVAL} EVAL_ITERS=${EVAL_ITERS} SEED=${SEED}"
 echo "[numa] NUMA_NODE=${NUMA_NODE} CPU_LIST='${CPU_LIST}' IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST}"
 
 "${NUMACTL_PREFIX[@]}" torchrun "${DISTRIBUTED_ARGS[@]}" bash -c '

@@ -33,16 +33,20 @@ export NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-COLL}
 export NCCL_DEBUG_FILE=${NCCL_DEBUG_FILE:-nccl_${HOSTNAME}_rank${NODE_RANK}.log}
 export NCCL_DEBUG_LEVEL=${NCCL_DEBUG_LEVEL:-TRACE}
 export USE_DPU=${USE_DPU:-0}
+export TRAIN_ITERS=${TRAIN_ITERS:-10}
+export EVAL_INTERVAL=${EVAL_INTERVAL:-100}
+export EVAL_ITERS=${EVAL_ITERS:-10}
+export SEED=${SEED:-1234}
 
 # Keep GDR disabled by default unless you have
 # already validated the GDR build/runtime path.
 # RDMA配置 - 修复ENOMEM错误
-export DMLC_USE_GDR=${DMLC_USE_GDR:-1}
-export BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH:-1024}
+export DMLC_USE_GDR=${DMLC_USE_GDR:-0}
+export BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH:-512}
 export BYTEPS_RDMA_START_DEPTH=${BYTEPS_RDMA_START_DEPTH:-32}
 export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
 
-export BYTEPS_PARTITION_BYTES=${BYTEPS_PARTITION_BYTES:-1024000}
+export BYTEPS_PARTITION_BYTES=${BYTEPS_PARTITION_BYTES:-1048576}
 
 extract_primary_hca() {
     local hca="${NCCL_IB_HCA:-}"
@@ -84,7 +88,7 @@ export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-${NCCL_SOCKET_IFNAME}}
 # Distributed setup
 ############################################
 GPUS_PER_NODE=${GPUS_PER_NODE:-1}  # 每台机器上的 GPU 数
-NUM_NODES=${NUM_NODES:-2}
+NUM_NODES=${NUM_NODES:-8}
 
 WORLD_SIZE=$((GPUS_PER_NODE * NUM_NODES))
 
@@ -93,6 +97,7 @@ DMLC_PS_ROOT_PORT=${DMLC_PS_ROOT_PORT:-9010}
 
 DMLC_NUM_WORKER=${DMLC_NUM_WORKER:-$NUM_NODES}
 DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-$NUM_NODES}
+export BYTEPS_LOCAL_SIZE=${BYTEPS_LOCAL_SIZE:-$GPUS_PER_NODE}
 
 # Set to the current node IP reachable by all other nodes.
 export DMLC_NODE_HOST=${DMLC_NODE_HOST:-${LOCAL_DETECTED_IP}}
@@ -246,7 +251,8 @@ MODEL_ARGS=(
     --init-method-std 0.02
 
     --log-interval 1
-    --train-iters 10
+    --train-iters "$TRAIN_ITERS"
+    --seed "$SEED"
     --no-rope-fusion
 
     --tensor-model-parallel-size "$TP_SIZE"
@@ -325,8 +331,8 @@ fi
 # Logging / eval
 ############################################
 EVAL_AND_LOGGING_ARGS=(
-    --eval-iters 10
-    --eval-interval 100
+    --eval-iters "$EVAL_ITERS"
+    --eval-interval "$EVAL_INTERVAL"
     --save-interval 1000
     --log-throughput
     --ckpt-format torch_dist
@@ -350,6 +356,7 @@ CMD=(python "$PRETRAIN_SCRIPT_PATH"
 ############################################
 echo "[net] HCA=${PRIMARY_HCA:-unset} IF=${DMLC_INTERFACE} LOCAL_IP=${LOCAL_DETECTED_IP:-unset} MASTER_ADDR=${MASTER_ADDR} ROOT=${DMLC_PS_ROOT_URI}"
 echo "[dpu] USE_DPU=${USE_DPU}"
+echo "[run] TRAIN_ITERS=${TRAIN_ITERS} EVAL_INTERVAL=${EVAL_INTERVAL} EVAL_ITERS=${EVAL_ITERS} SEED=${SEED}"
 echo "[numa] NUMA_NODE=${NUMA_NODE} CPU_LIST='${CPU_LIST}' IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST}"
 
 "${NUMACTL_PREFIX[@]}" torchrun "${DISTRIBUTED_ARGS[@]}" bash -c '
@@ -359,7 +366,7 @@ export DMLC_NUM_SERVER='"$DMLC_NUM_SERVER"'
 export DMLC_PS_ROOT_URI='"$DMLC_PS_ROOT_URI"'
 export DMLC_PS_ROOT_PORT='"$DMLC_PS_ROOT_PORT"'
 export DMLC_NODE_HOST='"$DMLC_NODE_HOST"'
-export BYTEPS_LOCAL_SIZE='"$GPUS_PER_NODE"'
+export BYTEPS_LOCAL_SIZE='"$BYTEPS_LOCAL_SIZE"'
 export BYTEPS_LOCAL_RANK="$LOCAL_RANK"
 export DMLC_WORKER_ID="$NODE_RANK"
 
