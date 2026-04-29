@@ -66,6 +66,8 @@ int CpuReducer::sum(void* dst, const void* src, size_t len, DataType dtype) {
                   reinterpret_cast<const double*>(src), len);
     case BYTEPS_FLOAT16:
       return _sum_float16(dst, src, len);
+    case BYTEPS_BFLOAT16:
+      return _sum_bfloat16(dst, src, len);
     case BYTEPS_UINT8:
       return _sum(reinterpret_cast<uint8_t*>(dst),
                   reinterpret_cast<const uint8_t*>(src), len);
@@ -140,6 +142,23 @@ int CpuReducer::_sum_float16(void* dst, const void* src, size_t len) {
   return 0;
 }
 
+int CpuReducer::_sum_bfloat16(void* dst, const void* src, size_t len) {
+  auto in = reinterpret_cast<const unsigned short*>(src);
+  auto inout = reinterpret_cast<unsigned short*>(dst);
+  len = len / (size_t)2;
+
+#pragma omp parallel for simd num_threads(_num_threads)
+  for (size_t i = 0; i < (size_t)len; ++i) {
+    float in_float;
+    float inout_float;
+    BFloatBits2Float(in + i, &in_float);
+    BFloatBits2Float(inout + i, &inout_float);
+    inout_float += in_float;
+    Float2BFloatBits(&inout_float, inout + i);
+  }
+  return 0;
+}
+
 int CpuReducer::sum(void* dst, const void* src1, const void* src2, size_t len,
                     DataType dtype) {
   switch (dtype) {
@@ -153,6 +172,8 @@ int CpuReducer::sum(void* dst, const void* src1, const void* src2, size_t len,
                   reinterpret_cast<const double*>(src2), len);
     case BYTEPS_FLOAT16:
       return _sum_float16(dst, src1, src2, len);
+    case BYTEPS_BFLOAT16:
+      return _sum_bfloat16(dst, src1, src2, len);
     case BYTEPS_UINT8:
       return _sum(reinterpret_cast<uint8_t*>(dst),
                   reinterpret_cast<const uint8_t*>(src1),
@@ -233,6 +254,26 @@ int CpuReducer::_sum_float16(void* dst, const void* src1, const void* src2,
   return 0;
 }
 
+int CpuReducer::_sum_bfloat16(void* dst, const void* src1, const void* src2,
+                              size_t len) {
+  auto in1 = reinterpret_cast<const unsigned short*>(src1);
+  auto in2 = reinterpret_cast<const unsigned short*>(src2);
+  auto out = reinterpret_cast<unsigned short*>(dst);
+  len = len / (size_t)2;
+
+#pragma omp parallel for simd num_threads(_num_threads)
+  for (size_t i = 0; i < (size_t)len; ++i) {
+    float in1_float;
+    float in2_float;
+    float out_float;
+    BFloatBits2Float(in1 + i, &in1_float);
+    BFloatBits2Float(in2 + i, &in2_float);
+    out_float = in1_float + in2_float;
+    Float2BFloatBits(&out_float, out + i);
+  }
+  return 0;
+}
+
 int CpuReducer::sum(void* dst, const void* src, size_t len, DataType dtype,
                     float alpha) {
   switch (dtype) {
@@ -244,6 +285,8 @@ int CpuReducer::sum(void* dst, const void* src, size_t len, DataType dtype,
                   reinterpret_cast<const double*>(src), len, alpha);
     case BYTEPS_FLOAT16:
       return _sum_float16(dst, src, len, alpha);
+    case BYTEPS_BFLOAT16:
+      return _sum_bfloat16(dst, src, len, alpha);
     case BYTEPS_UINT8:
       return _sum(reinterpret_cast<uint8_t*>(dst),
                   reinterpret_cast<const uint8_t*>(src), len, alpha);
@@ -324,6 +367,24 @@ int CpuReducer::_sum_float16(void* dst, const void* src, size_t len,
   return 0;
 }
 
+int CpuReducer::_sum_bfloat16(void* dst, const void* src, size_t len,
+                              float alpha) {
+  auto in = reinterpret_cast<const unsigned short*>(src);
+  auto inout = reinterpret_cast<unsigned short*>(dst);
+  len = len / (size_t)2;
+
+#pragma omp parallel for simd num_threads(_num_threads)
+  for (size_t i = 0; i < (size_t)len; ++i) {
+    float in_float;
+    float inout_float;
+    BFloatBits2Float(in + i, &in_float);
+    BFloatBits2Float(inout + i, &inout_float);
+    inout_float += in_float * alpha;
+    Float2BFloatBits(&inout_float, inout + i);
+  }
+  return 0;
+}
+
 int CpuReducer::sum(void* dst, const void* src1, const void* src2, size_t len,
                     DataType dtype, float alpha) {
   switch (dtype) {
@@ -337,6 +398,8 @@ int CpuReducer::sum(void* dst, const void* src1, const void* src2, size_t len,
                   reinterpret_cast<const double*>(src2), len, alpha);
     case BYTEPS_FLOAT16:
       return _sum_float16(dst, src1, src2, len, alpha);
+    case BYTEPS_BFLOAT16:
+      return _sum_bfloat16(dst, src1, src2, len, alpha);
     case BYTEPS_UINT8:
       return _sum(reinterpret_cast<uint8_t*>(dst),
                   reinterpret_cast<const uint8_t*>(src1),
@@ -420,6 +483,26 @@ int CpuReducer::_sum_float16(void* dst, const void* src1, const void* src2,
     Float2HalfBits(&out_float, out + i);
   }
 #endif
+  return 0;
+}
+
+int CpuReducer::_sum_bfloat16(void* dst, const void* src1, const void* src2,
+                              size_t len, float alpha) {
+  auto in1 = reinterpret_cast<const unsigned short*>(src1);
+  auto in2 = reinterpret_cast<const unsigned short*>(src2);
+  auto out = reinterpret_cast<unsigned short*>(dst);
+  len = len / (size_t)2;
+
+#pragma omp parallel for simd num_threads(_num_threads)
+  for (size_t i = 0; i < (size_t)len; ++i) {
+    float in1_float;
+    float in2_float;
+    float out_float;
+    BFloatBits2Float(in1 + i, &in1_float);
+    BFloatBits2Float(in2 + i, &in2_float);
+    out_float = in1_float + in2_float * alpha;
+    Float2BFloatBits(&out_float, out + i);
+  }
   return 0;
 }
 

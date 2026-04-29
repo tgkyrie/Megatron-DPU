@@ -31,6 +31,7 @@ class NcclGroupEntry {
   void RecordEvents();
   bool Ready();
   void SynchronizeEvents();
+  void BusyWaitEvents();
   void DestroyEvents();
 
   std::vector<std::shared_ptr<TensorTableEntry>> tasks;

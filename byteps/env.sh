@@ -6,7 +6,13 @@ export BYTEPS_LOCAL_SIZE=1
 export DMLC_PS_ROOT_URI=192.168.1.10
 export DMLC_PS_ROOT_PORT=12123
 export DMLC_ROLE=worker
-export DMLC_ENABLE_RDMA=ibverbs
+if [ "${BYTEPS_USE_TP:-0}" = "1" ] || [ "${DMLC_PS_VAN_TYPE:-}" = "tp" ]; then
+  unset DMLC_ENABLE_RDMA
+  unset DMLC_ENABLE_UCX
+  export DMLC_PS_VAN_TYPE=${DMLC_PS_VAN_TYPE:-tp}
+else
+  export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
+fi
 export DMLC_INTERFACE=ens39f1np1
 
 export DMLC_PS_ROOT_URI=192.168.1.10
@@ -77,4 +83,4 @@ torchrun --nproc_per_node=1 --nnodes=$NNODES --node_rank=$NODE_RANK \
   --overlap-cpu-optimizer-d2h-h2d \
   --use-precision-aware-optimizer \
   --legacy-tokenizer \
-  --profile 
+  --profile

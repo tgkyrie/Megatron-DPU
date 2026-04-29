@@ -109,6 +109,12 @@ ncclDataType_t getNcclDataType(DataType dtype) {
       return ncclFloat64;
     case BYTEPS_FLOAT16:
       return ncclFloat16;
+    case BYTEPS_BFLOAT16:
+#if defined(NCCL_VERSION_CODE) && NCCL_VERSION_CODE >= 21000
+      return ncclBfloat16;
+#else
+      BPS_CHECK(0) << "NCCL bfloat16 requires NCCL >= 2.10";
+#endif
     case BYTEPS_UINT8:
       return ncclUint8;
     case BYTEPS_INT32:
@@ -130,6 +136,7 @@ int getDataTypeLength(int dtype) {
     case BYTEPS_UINT8:
       return 1;
     case BYTEPS_FLOAT16:
+    case BYTEPS_BFLOAT16:
       return 2;
     case BYTEPS_INT32:
     case BYTEPS_FLOAT32:

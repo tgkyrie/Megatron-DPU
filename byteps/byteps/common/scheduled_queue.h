@@ -17,6 +17,7 @@
 #define BYTEPS_SCHEDULED_QUEUE_H
 
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <unordered_map>
 #include <vector>
@@ -37,11 +38,13 @@ class BytePSScheduledQueue {
   uint32_t pendingSize();
   void reportFinish(int size);
   void reset(uint64_t key, int cnt);
+  void notify();
 
  private:
   // TODO: use priority queue or heap
   std::vector<std::shared_ptr<TensorTableEntry>> _sq;
   std::mutex _mutex;
+  std::condition_variable _cv;
   uint64_t _credits;
   bool _is_scheduled;
   QueueType _qt;

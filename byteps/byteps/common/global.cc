@@ -18,6 +18,8 @@
 #include <malloc.h>
 #include <numa.h>
 
+#include <algorithm>
+#include <cctype>
 #include <sstream>
 
 #include "compressor/compressor.h"
@@ -39,6 +41,10 @@ int BytePSGlobal::_num_worker = 1;
 BytePSRole BytePSGlobal::_my_role;
 bool BytePSGlobal::_is_root_device;
 bool BytePSGlobal::_use_gdr = false;
+bool BytePSGlobal::_gdr_direct = true;
+int BytePSGlobal::_visible_device = -1;
+std::string BytePSGlobal::_enabled_loops;
+std::string BytePSGlobal::_disabled_loops;
 bool BytePSGlobal::_is_distributed_job;
 bool BytePSGlobal::_is_cross_pcie_switch;
 uint32_t BytePSGlobal::_partition_bytes = 4096000;
@@ -60,6 +66,7 @@ std::unordered_map<uint64_t, PSKV> BytePSGlobal::ps_kv_;
 std::vector<unsigned long> BytePSGlobal::_server_accumulated_len;
 unsigned long BytePSGlobal::_total_accumulated_len = 0;
 std::string BytePSGlobal::_hash_knob;
+std::string BytePSGlobal::_uuid = BYTEPS_DEFAULT_UUID;
 
 volatile BytePSScheduledQueue* BytePSGlobal::_queues[QueueNum] = {NULL};
 std::mutex BytePSGlobal::_queues_mutex[QueueNum];
@@ -93,6 +100,29 @@ volatile bool BytePSGlobal::_mixed_mode = false;
 uint64_t BytePSGlobal::_sample_key = std::numeric_limits<uint64_t>::max();
 std::atomic_int BytePSGlobal::joined_thread_cnt;
 
+namespace {
+
+bool ParseBoolEnv(const char* name, bool default_value) {
+  const char* value = getenv(name);
+  if (!value) return default_value;
+  return atoi(value) != 0;
+}
+
+bool TokenListContains(const std::string& list, const std::string& token) {
+  if (list.empty()) return false;
+  std::stringstream ss(list);
+  std::string item;
+  while (std::getline(ss, item, ',')) {
+    item.erase(std::remove_if(item.begin(), item.end(),
+                              [](unsigned char c) { return std::isspace(c); }),
+               item.end());
+    if (item == token) return true;
+  }
+  return false;
+}
+
+}  // namespace
+
 BytePSScheduledQueue* BytePSGlobal::GetScheduledQueue(QueueType queueType) {
   return (BytePSScheduledQueue*)_queues[queueType];
 }
@@ -114,7 +144,18 @@ void BytePSGlobal::Init() {
   }
 
   // Set the profiling-related variables
-  _use_gdr = getenv("DMLC_USE_GDR") ? atoi(getenv("DMLC_USE_GDR")) : false;
+  _use_gdr = ParseBoolEnv("DMLC_USE_GDR", false);
+  _gdr_direct = ParseBoolEnv("BYTEPS_GDR_DIRECT", false);
+  _uuid = getenv("BYTEPS_UUID")
+              ? std::string(getenv("BYTEPS_UUID"))
+              : (getenv("BYTEPS_JOB_ID") ? std::string(getenv("BYTEPS_JOB_ID"))
+                                          : BYTEPS_DEFAULT_UUID);
+  _enabled_loops = getenv("BYTEPS_ENABLE_LOOPS")
+                       ? std::string(getenv("BYTEPS_ENABLE_LOOPS"))
+                       : "";
+  _disabled_loops = getenv("BYTEPS_DISABLE_LOOPS")
+                        ? std::string(getenv("BYTEPS_DISABLE_LOOPS"))
+                        : "";
   _is_trace =
       getenv("BYTEPS_TRACE_ON") ? atoi(getenv("BYTEPS_TRACE_ON")) : _is_trace;
   _start_step = getenv("BYTEPS_TRACE_START_STEP")
@@ -151,6 +192,11 @@ void BytePSGlobal::Init() {
 
   BPS_CHECK(getenv("DMLC_NUM_WORKER")) << "error: env DMLC_NUM_WORKER not set";
   _num_worker = atoi(getenv("DMLC_NUM_WORKER"));
+  if (IsDirectGDR() && getenv("WORLD_SIZE")) {
+    BPS_CHECK_EQ(_num_worker, atoi(getenv("WORLD_SIZE")))
+        << "Direct GDR requires DMLC_NUM_WORKER to equal torch WORLD_SIZE "
+        << "(one ps-lite worker per GPU process).";
+  }
 
   if (getenv("BYTEPS_FORCE_DISTRIBUTED")) {
     _is_distributed_job = atoi(getenv("BYTEPS_FORCE_DISTRIBUTED"));
@@ -190,8 +236,15 @@ void BytePSGlobal::Init() {
 
   _shm_obj = std::make_shared<BytePSSharedMemory>();  // share memory obj
 
+  auto visible_device_env = getenv("BYTEPS_VISIBLE_DEVICE");
+  if (visible_device_env) {
+    _visible_device = atoi(visible_device_env);
+  } else {
+    _visible_device = _local_rank % std::max(_local_size, 1);
+  }
+
   // Set to associated GPU
-  CUDA_CALL(cudaSetDevice(_local_rank));
+  CUDA_CALL(cudaSetDevice(_visible_device));
 
   // Init NCCL
   _nccl_manager = std::make_shared<NcclManager>(_basic_comm);
@@ -286,13 +339,28 @@ void BytePSGlobal::Init() {
   return;
 }
 
+bool BytePSGlobal::IsLoopEnabled(QueueType queue_type) {
+  auto name = LogStrings[queue_type];
+  if (!_enabled_loops.empty()) {
+    return TokenListContains(_enabled_loops, name);
+  }
+  if (!_disabled_loops.empty() && TokenListContains(_disabled_loops, name)) {
+    return false;
+  }
+  return true;
+}
+
 ps::KVWorker<char>* BytePSGlobal::GetOrInitPS() {
   // we reuse _init_mutex, because BytePS should have been inited
   std::lock_guard<std::mutex> lock(_init_mutex);
   if (!_ps && IsDistributed() &&
-      _my_role == BytePSRole::LOCAL_ROOT) {  // only the root needs networking
+      (_my_role == BytePSRole::LOCAL_ROOT || IsDirectGDR())) {
     // init low-level ps implementation
-    ps::StartPS(0, ps::Node::WORKER, -1, true, "byteps\0");
+    int preferred_rank =
+        (IsDirectGDR() && ParseBoolEnv("BYTEPS_USE_PREFERRED_RANK", false))
+            ? _rank
+            : -1;
+    ps::StartPS(0, ps::Node::WORKER, preferred_rank, true, "byteps\0");
     _ps = new ps::KVWorker<char>(0, 0, 0);
     if (BytePSGlobal::IsResuming() || !ps::Postoffice::Get()->is_recovery()) {
       ps::Postoffice::Get()->Barrier(

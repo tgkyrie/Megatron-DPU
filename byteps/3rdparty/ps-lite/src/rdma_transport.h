@@ -688,15 +688,19 @@ class IPCTransport : public RDMATransport {
       // local_size < pcie_size or unbalance PCIe switches
       byteps_nccl_pcie_size = byteps_local_size;
     }
+    val = Environment::Get()->find("BYTEPS_UUID");
+    if (!val) val = Environment::Get()->find("BYTEPS_JOB_ID");
+    std::string job_id = val ? std::string(val) : "0000";
+
     // ensure this name corresponds with that in
     // BytePSSharedMemory::openPcieSharedMemory()
     if (byteps_local_size > byteps_nccl_pcie_size) {
       // cross pcie switch, use the last pcie cpu buffer
       auto byteps_pcie_num = byteps_local_size / byteps_nccl_pcie_size;
-      shm_prefix_ =
-          kShmPciePrefix + std::to_string(byteps_pcie_num - 1) + "_Shm_";
+      shm_prefix_ = kShmPciePrefix + job_id + "_" +
+                    std::to_string(byteps_pcie_num - 1) + "_Shm_";
     } else {
-      shm_prefix_ = kShmPrefix;
+      shm_prefix_ = kShmPrefix + job_id + "_";
     }
   };
 
@@ -811,7 +815,9 @@ class IPCTransport : public RDMATransport {
       return (void*)((char*)key_shm_addr_[base_key] + offset);
     }
     std::string shm_name(prefix);
-    shm_name += std::to_string(base_key);
+    std::stringstream stream;
+    stream << std::hex << base_key;
+    shm_name += stream.str();
     int shm_fd = shm_open(shm_name.c_str(), O_RDWR, 0666);
     CHECK_GE(shm_fd, 0) << "shm_open failed for " << shm_name << ", "
                         << strerror(errno);

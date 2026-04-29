@@ -66,6 +66,9 @@ void StartTask(::torch::Tensor tensor, ::torch::Tensor output,
                       (device == CPU_DEVICE_ID)
                       ? const_cast<void*>(byteps_input->data())
                       : nullptr);
+  int average_divisor = context.expected_workers > 0
+                            ? context.expected_workers
+                            : byteps_size();
 
   auto queue_list = common::GetPushQueueList(device);
   auto queue_list_pull = common::GetPullQueueList(device);
@@ -75,17 +78,17 @@ void StartTask(::torch::Tensor tensor, ::torch::Tensor output,
   auto enqueue_result = common::EnqueueTensor(
       context, byteps_input, byteps_output, ready_event, device, priority,
       version,
-      [handle, average, tensor, output](const Status& status) mutable {
+      [handle, average, average_divisor, tensor, output](const Status& status) mutable {
         // Will execute in the `device` context.
         if (average) {
 // #if TORCH_VERSION >= 1005000000
           if (isIntegralType(output.scalar_type())) {
-            output.floor_divide_(byteps_size());
+            output.floor_divide_(average_divisor);
             handle_manager.MarkDone(handle, status);
             return;
           }
 // #endif
-          output.div_(byteps_size());
+          output.div_(average_divisor);
         }
         handle_manager.MarkDone(handle, status);
       },
@@ -149,10 +152,7 @@ void RegisterTensorGroup(const std::string& name, int expected_workers) {
 }
 
 void WaitAndClear(int handle) {
-  while (!handle_manager.PollHandle(handle)) {
-    // std::this_thread::sleep_for(std::chrono::milliseconds(1)); 
-    std::this_thread::sleep_for(std::chrono::microseconds(20));
-  }
+  handle_manager.WaitHandle(handle);
   auto status = handle_manager.ReleaseHandle(handle);
   ThrowIfError(*status);
 }
@@ -204,6 +204,7 @@ PYBIND11_MODULE(c_lib, m) {
   m.def("byteps_torch_push_pull_async_torch_IntTensor", &DoPushPull);
   m.def("byteps_torch_push_pull_async_torch_LongTensor", &DoPushPull);
   m.def("byteps_torch_push_pull_async_torch_HalfTensor", &DoPushPull);
+  m.def("byteps_torch_push_pull_async_torch_BFloat16Tensor", &DoPushPull);
   m.def("byteps_torch_push_pull_async_torch_FloatTensor", &DoPushPull);
   m.def("byteps_torch_push_pull_async_torch_DoubleTensor", &DoPushPull);
 
@@ -213,6 +214,7 @@ PYBIND11_MODULE(c_lib, m) {
   m.def("byteps_torch_push_pull_group_sync_torch_IntTensor", &DoPushPullGroupSync);
   m.def("byteps_torch_push_pull_group_sync_torch_LongTensor", &DoPushPullGroupSync);
   m.def("byteps_torch_push_pull_group_sync_torch_HalfTensor", &DoPushPullGroupSync);
+  m.def("byteps_torch_push_pull_group_sync_torch_BFloat16Tensor", &DoPushPullGroupSync);
   m.def("byteps_torch_push_pull_group_sync_torch_FloatTensor", &DoPushPullGroupSync);
   m.def("byteps_torch_push_pull_group_sync_torch_DoubleTensor", &DoPushPullGroupSync);
 
@@ -221,6 +223,7 @@ PYBIND11_MODULE(c_lib, m) {
   m.def("byteps_torch_push_pull_async_torch_cuda_IntTensor", &DoPushPull);
   m.def("byteps_torch_push_pull_async_torch_cuda_LongTensor", &DoPushPull);
   m.def("byteps_torch_push_pull_async_torch_cuda_HalfTensor", &DoPushPull);
+  m.def("byteps_torch_push_pull_async_torch_cuda_BFloat16Tensor", &DoPushPull);
   m.def("byteps_torch_push_pull_async_torch_cuda_FloatTensor", &DoPushPull);
   m.def("byteps_torch_push_pull_async_torch_cuda_DoubleTensor", &DoPushPull);
 
@@ -228,6 +231,7 @@ PYBIND11_MODULE(c_lib, m) {
   m.def("byteps_torch_push_pull_group_sync_torch_cuda_IntTensor", &DoPushPullGroupSync);
   m.def("byteps_torch_push_pull_group_sync_torch_cuda_LongTensor", &DoPushPullGroupSync);
   m.def("byteps_torch_push_pull_group_sync_torch_cuda_HalfTensor", &DoPushPullGroupSync);
+  m.def("byteps_torch_push_pull_group_sync_torch_cuda_BFloat16Tensor", &DoPushPullGroupSync);
   m.def("byteps_torch_push_pull_group_sync_torch_cuda_FloatTensor", &DoPushPullGroupSync);
   m.def("byteps_torch_push_pull_group_sync_torch_cuda_DoubleTensor", &DoPushPullGroupSync);
 #endif

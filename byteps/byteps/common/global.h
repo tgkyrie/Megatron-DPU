@@ -15,6 +15,7 @@
 
 #ifndef BYTEPS_GLOBAL_H
 #define BYTEPS_GLOBAL_H
+#define BYTEPS_DEFAULT_UUID "0000"
 
 #include <unistd.h>
 
@@ -63,6 +64,7 @@ class BytePSGlobal {
   static int GetLocalSize() { return _local_size; }
   static int GetWorkerID() { return _worker_id; }
   static int GetNumWorker() { return _num_worker; }
+  static int GetVisibleDevice() { return _visible_device; }
   static int GetPcieSwitchSize() { return _nccl_manager->GetSize(); }
   static int GetPcieSwitchIndex() {
     return _local_rank / _nccl_manager->GetSize();
@@ -75,8 +77,11 @@ class BytePSGlobal {
   }
 
   static bool IsUseGDR() {return _use_gdr;}
+  static bool IsDirectGDR() { return _use_gdr && _gdr_direct; }
+  static bool IsLoopEnabled(QueueType queue_type);
   static bool IsRootDevice() { return _is_root_device; }
   static bool IsDistributed() { return _is_distributed_job; }
+  static std::string GetUUID() { return _uuid; }
   static bool IsCrossPcieSwitch() { return _is_cross_pcie_switch; }
   static BytePSRole GetMyRole() { return _my_role; }
   static std::shared_ptr<BytePSComm> GetBasicComm() { return _basic_comm; }
@@ -159,6 +164,10 @@ class BytePSGlobal {
   static int _worker_id;
   static int _num_worker;
   static bool _use_gdr;
+  static bool _gdr_direct;
+  static int _visible_device;
+  static std::string _enabled_loops;
+  static std::string _disabled_loops;
   static bool _is_root_device;
   static bool _is_distributed_job;
   static bool _is_cross_pcie_switch;
@@ -218,6 +227,7 @@ class BytePSGlobal {
   }
 
   static int _pagesize;
+  static std::string _uuid;
   static size_t DivUp(size_t x, size_t y) { return (x + y - 1) / y; }
   static size_t RoundUp(size_t x, size_t y) { return DivUp(x, y) * y; }
 

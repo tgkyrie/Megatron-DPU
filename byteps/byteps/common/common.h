@@ -68,7 +68,8 @@ enum DataType {
   // BYTEPS_UINT16 = 7,
   // BYTEPS_INT16 = 8,
   // BYTEPS_BOOL = 9,
-  // BYTEPS_BYTE = 10,
+  BYTEPS_BFLOAT16 = 10,
+  // BYTEPS_BYTE = 11,
 };
 
 // List of supported frameworks.

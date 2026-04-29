@@ -499,7 +499,7 @@ void init_global_env() {
   role_ = ps::GetRole(role_str);
   if (role_str == std::string("server")) {
     is_server_ = true;
-    preferred_rank = -1;
+    preferred_rank = GetEnv("DMLC_SERVER_ID", -1);
   } else {
     is_server_ = false;
     preferred_rank = 0;

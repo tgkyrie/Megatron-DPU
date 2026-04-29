@@ -18,6 +18,7 @@
 #define BYTEPS_TORCH_HANDLE_MANAGER_H
 
 #include <atomic>
+#include <condition_variable>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
@@ -34,12 +35,14 @@ class HandleManager {
   int AllocateHandle();
   void MarkDone(int handle, const Status& status);
   bool PollHandle(int handle);
+  std::shared_ptr<Status> WaitHandle(int handle);
   std::shared_ptr<Status> ReleaseHandle(int handle);
 
  private:
   std::atomic_int last_handle_;
   std::unordered_map<int, std::shared_ptr<Status>> results_;
   std::mutex mutex_;
+  std::condition_variable cv_;
 };
 
 }  // namespace torch

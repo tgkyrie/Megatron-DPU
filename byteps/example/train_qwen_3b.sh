@@ -21,7 +21,13 @@ export NCCL_SOCKET_IFNAME=ens39f1np1
 export NCCL_IB_HCA=mlx5_1
 export GLOO_SOCKET_IFNAME=ens39f1np1
 
-export DMLC_ENABLE_RDMA=ibverbs
+if [ "${BYTEPS_USE_TP:-0}" = "1" ] || [ "${DMLC_PS_VAN_TYPE:-}" = "tp" ]; then
+  unset DMLC_ENABLE_RDMA
+  unset DMLC_ENABLE_UCX
+  export DMLC_PS_VAN_TYPE=${DMLC_PS_VAN_TYPE:-tp}
+else
+  export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
+fi
 export DMLC_ROLE=worker
 export DMLC_NUM_SERVER=1
 export DMLC_INTERFACE=ens39f1np1

@@ -384,7 +384,7 @@ bool RunSyncNcclOnce() {
   auto nccl_entry = BytePSGlobal::GetNccl()->DequeueGroup();
   if (nccl_entry) {
     if (IsSyncCudaCopyEnabled()) {
-      nccl_entry->SynchronizeEvents();
+      nccl_entry->BusyWaitEvents();
     }
     for (size_t i = 0; i < nccl_entry->tasks.size(); i++) {
       FinishOrProceed(nccl_entry->tasks[i]);
@@ -609,27 +609,31 @@ bool RunGDRPushLoopOnce(){
   auto q = BytePSGlobal::GetScheduledQueue(this_op);
   auto task = q->getTask();
   if (task) {
-    BPS_CHECK(BytePSGlobal::IsRootDevice())
-        << "only root device should enter PUSH loop";
-    auto tensor=task->tensor;
+    if (!BytePSGlobal::IsDirectGDR()) {
+      BPS_CHECK(BytePSGlobal::IsRootDevice())
+          << "only root device should enter PUSH loop";
+    }
     if (BytePSGlobal::IsDistributed()) {
       auto offset = task->offset;
       auto len = task->len;
 
-      char *data;
-      // BPS_CHECK(task->cpubuff);
-      if(task->cpubuff){
+      char *data = nullptr;
+      if (task->tensor) {
+        data = const_cast<char *>(
+            static_cast<const char *>(task->tensor->data()) + offset);
+      } else if (task->gpu_ptr) {
+        data = const_cast<char *>(static_cast<const char *>(task->gpu_ptr));
+      } else if (task->cpubuff) {
         data =
           const_cast<char *>(static_cast<const char *>(task->cpubuff) + offset);
-      }else{
-        data =
-           const_cast<char *>(static_cast<const char *> ( (char*)(tensor->data()) + offset ) );
       }
-      
+      BPS_CHECK(data) << "GDR push has no data buffer, key=" << task->key;
 
       // get metadata
-      const int dtype = task->tensor->dtype();
-
+      const auto dtype_tensor = task->tensor ? task->tensor : task->output;
+      BPS_CHECK(dtype_tensor)
+          << "GDR push has no dtype tensor, key=" << task->key;
+      const int dtype = dtype_tensor->dtype();
 
       // false means not to delete data when SArray is deleted
       ps::SArray<char> vals(data, len, false);
@@ -655,23 +659,31 @@ bool RunGDRPullLoopOnce() {
   auto q = BytePSGlobal::GetScheduledQueue(this_op);
   auto task = q->getTask();
   if (task) {
-    BPS_CHECK(BytePSGlobal::IsRootDevice())
-        << "only root device should enter PULL loop";
-    auto tensor=task->tensor;
+    if (!BytePSGlobal::IsDirectGDR()) {
+      BPS_CHECK(BytePSGlobal::IsRootDevice())
+          << "only root device should enter PULL loop";
+    }
     // TODO: allow merging
     auto offset = task->offset;
     auto len = task->len;
-    
-    char *data;
-    if(task->cpubuff){
+
+    char *data = nullptr;
+    if (task->output) {
+      data = const_cast<char *>(
+          static_cast<const char *>(task->output->data()) + offset);
+    } else if (task->gpu_ptr) {
+      data = const_cast<char *>(static_cast<const char *>(task->gpu_ptr));
+    } else if (task->cpubuff) {
       data =
         const_cast<char *>(static_cast<const char *>(task->cpubuff) + offset);
-    }else{
-      data =
-        const_cast<char *>(static_cast<const char *> ( (char*)(tensor->data()) + offset ) );
     }
+    BPS_CHECK(data) << "GDR pull has no data buffer, key=" << task->key;
+
     // get metadata
-    const int dtype = task->output->dtype();
+    const auto dtype_tensor = task->output ? task->output : task->tensor;
+    BPS_CHECK(dtype_tensor)
+        << "GDR pull has no dtype tensor, key=" << task->key;
+    const int dtype = dtype_tensor->dtype();
 
     // false means not to delete data when SArray is deleted
     auto vals = new ps::SArray<char>(data, len, false);

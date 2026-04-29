@@ -15,7 +15,9 @@
 
 #include "nccl_manager.h"
 
+#include <chrono>
 #include <cstdlib>
+#include <thread>
 
 #include "global.h"
 #include "logging.h"
@@ -59,6 +61,17 @@ bool NcclGroupEntry::Ready() {
 void NcclGroupEntry::SynchronizeEvents() {
   for (size_t i = 0; i < tasks.size(); i++) {
     CUDA_CALL(cudaEventSynchronize(_events[i]));
+  }
+}
+
+void NcclGroupEntry::BusyWaitEvents() {
+  for (size_t i = 0; i < tasks.size(); i++) {
+    auto status = cudaEventQuery(_events[i]);
+    while (status == cudaErrorNotReady) {
+      std::this_thread::sleep_for(std::chrono::nanoseconds(1000));
+      status = cudaEventQuery(_events[i]);
+    }
+    CUDA_CALL(status);
   }
 }
 

@@ -113,12 +113,13 @@ class CpuReducer {
       }
     }
 
-    *res = *reinterpret_cast<float const*>(&f);
+    std::memcpy(res, &f, sizeof(float));
   }
 
   inline void Float2HalfBits(const float* src, unsigned short* dest) {
     // software implementation rounds toward nearest even
-    unsigned const& s = *reinterpret_cast<unsigned const*>(src);
+    unsigned s;
+    std::memcpy(&s, src, sizeof(unsigned));
     uint16_t sign = uint16_t((s >> 16) & 0x8000);
     int16_t exp = uint16_t(((s >> 23) & 0xff) - 127);
     int mantissa = s & 0x7fffff;
@@ -178,6 +179,20 @@ class CpuReducer {
     *dest = u;
   }
 
+  inline void BFloatBits2Float(const unsigned short* src, float* res) {
+    uint32_t bits = static_cast<uint32_t>(*src) << 16;
+    std::memcpy(res, &bits, sizeof(float));
+  }
+
+  inline void Float2BFloatBits(const float* src, unsigned short* dest) {
+    uint32_t bits;
+    std::memcpy(&bits, src, sizeof(uint32_t));
+    // Round to nearest-even before truncating the low 16 bits.
+    uint32_t lsb = (bits >> 16) & 1;
+    uint32_t rounding_bias = 0x7fff + lsb;
+    *dest = static_cast<unsigned short>((bits + rounding_bias) >> 16);
+  }
+
   template <typename T>
   int _sum(T* dst, const T* src, size_t len);
   template <typename T>
@@ -185,6 +200,8 @@ class CpuReducer {
 
   int _sum_float16(void* dst, const void* src, size_t len);
   int _sum_float16(void* dst, const void* src1, const void* src2, size_t len);
+  int _sum_bfloat16(void* dst, const void* src, size_t len);
+  int _sum_bfloat16(void* dst, const void* src1, const void* src2, size_t len);
 
   template <typename T>
   int _sum(T* dst, const T* src, size_t len, float alpha);
@@ -195,6 +212,9 @@ class CpuReducer {
   int _sum_float16(void* dst, const void* src, size_t len, float alpha);
   int _sum_float16(void* dst, const void* src1, const void* src2, size_t len,
                    float alpha);
+  int _sum_bfloat16(void* dst, const void* src, size_t len, float alpha);
+  int _sum_bfloat16(void* dst, const void* src1, const void* src2, size_t len,
+                    float alpha);
 
   float _convert_half_to_full_precision(uint16_t h);
   uint16_t _convert_full_to_half_precision(float f);

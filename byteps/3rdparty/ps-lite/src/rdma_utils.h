@@ -36,6 +36,7 @@
 #include <map>
 #include <queue>
 #include <set>
+#include <sstream>
 #include <string>
 #include <thread>
 #include <tuple>
@@ -57,6 +58,8 @@ static const int kRdmaListenBacklog = 128;
 static const int kMaxHostnameLength = 16;
 
 // should have the same prefix with BytePS shared memory
+// for pcie reduce:  BytePS_Pcie{JOB_ID}_{pcie_id}_Shm_{HEX_BYTEPS_KEY}
+// otherwise:        BytePS_ShM_{JOB_ID}_{HEX_BYTEPS_KEY}
 static const std::string kShmPrefix("BytePS_ShM_");
 static const std::string kShmPciePrefix("BytePS_Pcie");
 

@@ -14,6 +14,9 @@ if [ "$#" != "5" ]; then
     exit -1
 fi
 
+shell_pid=$$
+echo "shell_pid $shell_pid"
+
 launch_mode=$1
 bytes_per_msg=$2
 msg_count=$3
@@ -87,8 +90,16 @@ export DMLC_PS_ROOT_PORT=${DMLC_PS_ROOT_PORT:-12278} # scheduler's port (can ran
 # ==============================
 # ======= RDMAVan options ======
 # ==============================
-# enable rdma
-export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-1}
+USE_TP_VAN=0
+if [ "${BYTEPS_USE_TP:-0}" = "1" ] || [ "${DMLC_PS_VAN_TYPE:-}" = "tp" ]; then
+    USE_TP_VAN=1
+    unset DMLC_ENABLE_RDMA
+    unset DMLC_ENABLE_UCX
+    export DMLC_PS_VAN_TYPE=${DMLC_PS_VAN_TYPE:-tp}
+else
+    # enable rdma
+    export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-1}
+fi
 # NIC for RDMAVan
 export DMLC_INTERFACE=eth2
 
@@ -111,8 +122,10 @@ export UCX_LOG_LEVEL=info
 # ==============================
 # ======== UCXVan options ======
 # ==============================
-# enable ucx
-export DMLC_ENABLE_UCX=${DMLC_ENABLE_UCX:-1}
+if [ "${USE_TP_VAN}" = "0" ]; then
+    # enable ucx
+    export DMLC_ENABLE_UCX=${DMLC_ENABLE_UCX:-1}
+fi
 export UCX_NET_DEVICES=${UCX_NET_DEVICES:=eth0,eth2,mlx5_2:1}
 export BYTEPS_UCX_SHORT_THRESH=4096
 
@@ -128,7 +141,7 @@ export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
 # export BENCHMARK_NTHREAD=${BENCHMARK_NTHREAD:=$DMLC_GROUP_SIZE}
 export SKIP_DEV_ID_CHECK=${SKIP_DEV_ID_CHECK:-1}
 export DMLC_RANK=${DMLC_RANK:=0}
-export GDB=" gdb -ex run --args "
+export GDB=" gdb -ex run -batch --args "
 export GDB=" "
 
 if [ "$launch_mode" == "local" ] # no other args

@@ -5,7 +5,13 @@ set -e
 WORKER_ID=${WORKER_ID:-0}   # 可以在外面 export WORKER_ID 覆盖
 
 # ===== RDMA & BytePS 基本配置 =====
-export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
+if [ "${BYTEPS_USE_TP:-0}" = "1" ] || [ "${DMLC_PS_VAN_TYPE:-}" = "tp" ]; then
+  unset DMLC_ENABLE_RDMA
+  unset DMLC_ENABLE_UCX
+  export DMLC_PS_VAN_TYPE=${DMLC_PS_VAN_TYPE:-tp}
+else
+  export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
+fi
 export DMLC_NUM_WORKER=${DMLC_NUM_WORKER:-2}
 export DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-2}
 export DMLC_ROLE=worker

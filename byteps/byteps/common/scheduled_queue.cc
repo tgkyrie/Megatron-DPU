@@ -16,6 +16,7 @@
 #include "scheduled_queue.h"
 
 #include <algorithm>
+#include <chrono>
 
 #include "global.h"
 #include "logging.h"
@@ -60,7 +61,7 @@ BytePSScheduledQueue::BytePSScheduledQueue(QueueType type) {
       break;
     case COMPRESS:
     case PUSH:
-      if (BytePSGlobal::IsRootDevice()) {
+      if (BytePSGlobal::IsRootDevice() && !BytePSGlobal::IsDirectGDR()) {
         _rt = BytePSGlobal::GetPushTable();
       }
       break;
@@ -80,29 +81,32 @@ BytePSScheduledQueue::BytePSScheduledQueue(QueueType type) {
 }
 
 void BytePSScheduledQueue::addTask(std::shared_ptr<TensorTableEntry> entry) {
-  std::lock_guard<std::mutex> lock(_mutex);
-  _sq.push_back(entry);
-  if (_is_scheduled) {
-    // TODO: below can be optimized to O(n) using insertion sort
-    std::sort(
-        _sq.begin(), _sq.end(),
-        [](std::shared_ptr<TensorTableEntry> a,
-           std::shared_ptr<TensorTableEntry> b) {
-          if (a->priority == b->priority) {
-            return (a->key < b->key);  // from the first partition to the last
-          }
-          return (a->priority > b->priority);  // from higher priority to lower
-        });
+  {
+    std::lock_guard<std::mutex> lock(_mutex);
+    _sq.push_back(entry);
+    if (_is_scheduled) {
+      // TODO: below can be optimized to O(n) using insertion sort
+      std::sort(
+          _sq.begin(), _sq.end(),
+          [](std::shared_ptr<TensorTableEntry> a,
+             std::shared_ptr<TensorTableEntry> b) {
+            if (a->priority == b->priority) {
+              return (a->key < b->key);  // from the first partition to the last
+            }
+            return (a->priority > b->priority);  // from higher priority to lower
+          });
+    }
+    BPS_CHECK(entry->tensor_name != "");
+    BPS_LOG(TRACE) << "Queue " << LogStrings[_qt]
+                   << " addTask: " << entry->tensor_name << " key: " << entry->key
+                   << " rank: " << BytePSGlobal::GetLocalRank();
+    if(getQueueType()==PUSH){
+      BPS_LOG(DEBUG) << "Queue " << LogStrings[_qt]
+                   << " addTask: " << entry->tensor_name << " key: " << entry->key
+                   << " rank: " << BytePSGlobal::GetLocalRank();
+    }
   }
-  BPS_CHECK(entry->tensor_name != "");
-  BPS_LOG(TRACE) << "Queue " << LogStrings[_qt]
-                 << " addTask: " << entry->tensor_name << " key: " << entry->key
-                 << " rank: " << BytePSGlobal::GetLocalRank();
-  if(getQueueType()==PUSH){
-    BPS_LOG(DEBUG) << "Queue " << LogStrings[_qt]
-                 << " addTask: " << entry->tensor_name << " key: " << entry->key
-                 << " rank: " << BytePSGlobal::GetLocalRank();
-  }
+  _cv.notify_one();
   return;
 }
 
@@ -128,7 +132,10 @@ void BytePSScheduledQueue::recorderTs(std::shared_ptr<TensorTableEntry> task) {
 }
 
 std::shared_ptr<TensorTableEntry> BytePSScheduledQueue::getTask() {
-  std::lock_guard<std::mutex> lock(_mutex);
+  std::unique_lock<std::mutex> lock(_mutex);
+  if (_sq.empty()) {
+    _cv.wait_for(lock, std::chrono::microseconds(100));
+  }
   std::shared_ptr<TensorTableEntry> task;
   // TODO: below can be optimized -- if we take task from the tail, erase() can
   // be faster
@@ -169,7 +176,10 @@ std::shared_ptr<TensorTableEntry> BytePSScheduledQueue::getTask() {
 
 std::shared_ptr<TensorTableEntry> BytePSScheduledQueue::getTask(uint64_t key) {
   BPS_CHECK(!_is_scheduled);
-  std::lock_guard<std::mutex> lock(_mutex);
+  std::unique_lock<std::mutex> lock(_mutex);
+  if (_sq.empty()) {
+    _cv.wait_for(lock, std::chrono::microseconds(100));
+  }
   std::shared_ptr<TensorTableEntry> task;
   for (auto it = _sq.begin(); it != _sq.end(); ++it) {
     if ((*it)->ready_event) {
@@ -204,6 +214,7 @@ void BytePSScheduledQueue::reportFinish(int size) {
     std::lock_guard<std::mutex> lock(_mutex);
     _credits += size;
   }
+  _cv.notify_one();
   return;
 }
 
@@ -212,7 +223,10 @@ void BytePSScheduledQueue::reset(uint64_t key, int cnt) {
   if(_rt) {
     _rt->SetReadyCount(key, cnt);
   }
+  _cv.notify_one();
 }
+
+void BytePSScheduledQueue::notify() { _cv.notify_all(); }
 
 }  // namespace common
 }  // namespace byteps

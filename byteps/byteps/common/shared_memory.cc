@@ -20,6 +20,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <sstream>
 #include "global.h"
 
 namespace byteps {
@@ -29,19 +30,21 @@ void* BytePSSharedMemory::openSharedMemory(const std::string& prefix,
                                            uint64_t key, size_t size) {
   size = BytePSGlobal::RoundUpToPageSize(size);
   std::string shm_name(prefix);
-  shm_name += std::to_string(key);
+  std::stringstream stream;
+  stream << std::hex << key;
+  shm_name += stream.str();
   int shm_fd = shm_open(shm_name.c_str(), O_CREAT | O_RDWR, 0666);
   BPS_CHECK_GE(shm_fd, 0) << "shm_open failed for " << shm_name << " " << strerror(errno);
 
   BPS_CHECK_GE(ftruncate(shm_fd, size), 0) << strerror(errno);
 
   void* ptr = mmap(0, size, PROT_READ | PROT_WRITE, MAP_SHARED, shm_fd, 0);
+  BPS_CHECK_NE(ptr, (void*)-1) << strerror(errno);
   CUDA_CALL(cudaHostRegister(ptr, size, cudaHostRegisterDefault));
   // mlock(ptr, size);
 
-  BPS_CHECK_NE(ptr, (void*)-1) << strerror(errno);
-
-  BPS_LOG(TRACE) << "initialized share memory size " << size;
+  BPS_LOG(TRACE) << "initialized share memory size " << size
+                 << ", name=" << shm_name;
 
   std::lock_guard<std::mutex> lock(_shm_mu);
   _key_shm_addr[shm_name] = ptr;
@@ -53,7 +56,8 @@ std::vector<void*> BytePSSharedMemory::openPcieSharedMemory(uint64_t key,
                                                             size_t size) {
   std::vector<void*> r;
   for (int i = 0; i < BytePSGlobal::GetPcieSwitchNum(); i++) {
-    auto prefix = std::string("BytePS_Pcie") + std::to_string(i) + "_Shm_";
+    auto prefix = std::string("BytePS_Pcie") + BytePSGlobal::GetUUID() + "_" +
+                  std::to_string(i) + "_Shm_";
     if (BytePSGlobal::IsDistributed()) {
       if (BytePSGlobal::IsCrossPcieSwitch()) {
         if (i <= numa_max_node()) {

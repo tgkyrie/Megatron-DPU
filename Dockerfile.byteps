@@ -6,6 +6,7 @@ ARG https_proxy
 
 ARG BYTEPS_BASE_PATH=/usr/local
 ARG BYTEPS_PATH=$BYTEPS_BASE_PATH/byteps
+ARG ENABLE_TP=1
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -14,6 +15,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     tzdata ca-certificates git curl vim wget nano iproute2 \
     cmake build-essential \
     numactl libnuma-dev \
+    libuv1 libuv1-dev \
     libzmq5 libzmq3-dev \
     ibverbs-providers librdmacm-dev ibverbs-utils rdmacm-utils libibverbs-dev \
     libucx-dev \
@@ -22,12 +24,50 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 RUN pip3 install -U cloudpickle==3.1.1 -i https://pypi.tuna.tsinghua.edu.cn/simple
 
+# Optional ps-lite TensorPipe Van support. The PyTorch image normally ships
+# TensorPipe headers/libs with torch; stage them under a stable prefix for
+# ps-lite's USE_TP build.
+ENV BYTEPS_WITH_TP=${ENABLE_TP}
+ENV BYTEPS_TP_HOME=/usr/local/tensorpipe
+ENV TP_INSTALL_PATH=/usr/local/tensorpipe
+ENV BYTEPS_TP_LIBS="tensorpipe tensorpipe_uv"
+RUN set -eux; \
+    if [ "${ENABLE_TP}" = "1" ]; then \
+      TORCH_DIR="$(python3 -c 'from pathlib import Path; import torch; print(Path(torch.__file__).resolve().parent)')"; \
+      test -f "${TORCH_DIR}/include/tensorpipe/tensorpipe.h"; \
+      test -d "${TORCH_DIR}/lib"; \
+      mkdir -p "${BYTEPS_TP_HOME}/include" "${BYTEPS_TP_HOME}/lib64"; \
+      rm -rf "${BYTEPS_TP_HOME}/include/tensorpipe"; \
+      cp -a "${TORCH_DIR}/include/tensorpipe" "${BYTEPS_TP_HOME}/include/"; \
+      find "${TORCH_DIR}/lib" -maxdepth 1 -name 'libtensorpipe*' -exec ln -sf '{}' "${BYTEPS_TP_HOME}/lib64/" ';'; \
+      ls "${BYTEPS_TP_HOME}/lib64"/libtensorpipe*; \
+    fi
+
 WORKDIR ${BYTEPS_BASE_PATH}
 # 将本地仓库中的 byteps 目录（Megatron-DPU/byteps）作为构建源
 COPY ./byteps/ ${BYTEPS_BASE_PATH}/byteps/
 # 便捷脚本放入 /usr/local
-COPY ./byteps/sh/server.sh ./byteps/sh/scheduler.sh ./byteps/sh/worker.sh ./byteps/sh/worker_ddp.sh ./byteps/sh/worker_single.sh ./byteps/sh/pushpull.sh ./byteps/sh/allreduce.sh /usr/local/
-RUN chmod +x /usr/local/server.sh /usr/local/scheduler.sh /usr/local/worker.sh /usr/local/worker_ddp.sh /usr/local/worker_single.sh /usr/local/allreduce.sh
+COPY ./byteps/sh/server.sh \
+     ./byteps/sh/scheduler.sh \
+     ./byteps/sh/worker.sh \
+     ./byteps/sh/server_direct.sh \
+     ./byteps/sh/scheduler_direct.sh \
+     ./byteps/sh/worker_direct_gpu.sh \
+     ./byteps/sh/worker_ddp.sh \
+     ./byteps/sh/worker_single.sh \
+     ./byteps/sh/pushpull.sh \
+     ./byteps/sh/allreduce.sh \
+     /usr/local/
+RUN chmod +x /usr/local/server.sh \
+    /usr/local/scheduler.sh \
+    /usr/local/worker.sh \
+    /usr/local/server_direct.sh \
+    /usr/local/scheduler_direct.sh \
+    /usr/local/worker_direct_gpu.sh \
+    /usr/local/worker_ddp.sh \
+    /usr/local/worker_single.sh \
+    /usr/local/pushpull.sh \
+    /usr/local/allreduce.sh
 
 # Enable UCX in BytePS build (ps-lite UCXVan)
 ENV BYTEPS_WITH_UCX=1

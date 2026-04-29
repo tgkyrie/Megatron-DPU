@@ -27,8 +27,11 @@ int HandleManager::AllocateHandle() {
 }
 
 void HandleManager::MarkDone(int handle, const Status& status) {
-  std::lock_guard<std::mutex> guard(mutex_);
-  results_[handle] = std::make_shared<Status>(status);
+  {
+    std::lock_guard<std::mutex> guard(mutex_);
+    results_[handle] = std::make_shared<Status>(status);
+  }
+  cv_.notify_all();
 }
 
 bool HandleManager::PollHandle(int handle) {
@@ -38,6 +41,24 @@ bool HandleManager::PollHandle(int handle) {
                                 " was not created or has been cleared.");
   }
   return results_[handle] != nullptr;
+}
+
+std::shared_ptr<Status> HandleManager::WaitHandle(int handle) {
+  std::unique_lock<std::mutex> guard(mutex_);
+  auto it = results_.find(handle);
+  if (it == results_.end()) {
+    throw std::invalid_argument("Handle " + std::to_string(handle) +
+                                " was not created or has been cleared.");
+  }
+  cv_.wait(guard, [&]() {
+    auto current = results_.find(handle);
+    if (current == results_.end()) {
+      throw std::invalid_argument("Handle " + std::to_string(handle) +
+                                  " was not created or has been cleared.");
+    }
+    return current->second != nullptr;
+  });
+  return results_[handle];
 }
 
 std::shared_ptr<Status> HandleManager::ReleaseHandle(int handle) {

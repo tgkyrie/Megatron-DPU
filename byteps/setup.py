@@ -242,6 +242,20 @@ def use_ucx():
     byteps_with_ucx = int(os.environ.get('BYTEPS_WITH_UCX', 0))
     return byteps_with_ucx
 
+def use_tp():
+    byteps_with_tp = int(os.environ.get('BYTEPS_WITH_TP', 0))
+    return byteps_with_tp
+
+def get_tp_home():
+    return os.environ.get('BYTEPS_TP_HOME',
+                          os.environ.get('TP_INSTALL_PATH', '/usr/local/tensorpipe'))
+
+def get_tp_libs():
+    return shlex.split(os.environ.get('BYTEPS_TP_LIBS', 'tensorpipe tensorpipe_uv'))
+
+def use_cuda_for_pslite():
+    return int(os.environ.get('BYTEPS_WITH_GPU', 0)) != 0
+
 def with_pre_setup():
     return int(os.environ.get('BYTEPS_WITHOUT_PRESETUP', 0)) == 0
 
@@ -290,7 +304,8 @@ def get_common_options(build_ext):
                'byteps/common/ready_table.cc',
                'byteps/common/shared_memory.cc',
                'byteps/common/nccl_manager.cc',
-               'byteps/common/cpu_reducer.cc'] + [
+               'byteps/common/cpu_reducer.cc',
+               'byteps/common/gpu_reducer.cc'] + [
                'byteps/common/compressor/compressor_registry.cc',
                'byteps/common/compressor/error_feedback.cc',
                'byteps/common/compressor/momentum.cc',
@@ -329,6 +344,11 @@ def get_common_options(build_ext):
         if ucx_home:
             INCLUDES += [f'{ucx_home}/include']
             LIBRARY_DIRS += [f'{ucx_home}/lib']
+    if use_tp():
+        tp_home = get_tp_home()
+        INCLUDES += [f'{tp_home}/include']
+        LIBRARY_DIRS += [f'{tp_home}/lib64', f'{tp_home}/lib']
+        LIBRARIES += get_tp_libs()
 
     # ps-lite
     EXTRA_OBJECTS = ['3rdparty/ps-lite/build/libps.a',
@@ -349,6 +369,7 @@ def build_server(build_ext, options):
     server_lib.include_dirs = options['INCLUDES']
     server_lib.sources = ['byteps/server/server.cc',
                           'byteps/common/cpu_reducer.cc',
+                          'byteps/common/gpu_reducer.cc',
                           'byteps/common/logging.cc',
                           'byteps/common/common.cc'] + [
                           'byteps/common/compressor/compressor_registry.cc',
@@ -375,6 +396,11 @@ def build_server(build_ext, options):
         if ucx_home:
             server_lib.include_dirs += [f'{ucx_home}/include']
             server_lib.library_dirs += [f'{ucx_home}/lib']
+    if use_tp():
+        tp_home = get_tp_home()
+        server_lib.include_dirs += [f'{tp_home}/include']
+        server_lib.library_dirs += [f'{tp_home}/lib64', f'{tp_home}/lib']
+        server_lib.libraries += get_tp_libs()
 
     build_ext.build_extension(server_lib)
 
@@ -979,6 +1005,12 @@ class custom_build_ext(build_ext):
                 make_option += 'USE_UCX=1 '
                 if ucx_home:
                     make_option += f'UCX_PATH={ucx_home} '
+                if use_cuda_for_pslite():
+                    cuda_home = os.environ.get('BYTEPS_CUDA_HOME', '/usr/local/cuda')
+                    make_option += f'USE_CUDA=1 CUDA_HOME={cuda_home} '
+            if use_tp():
+                tp_home = get_tp_home()
+                make_option += f'USE_TP=1 TP_INSTALL_PATH={tp_home} '
 
             if with_pre_setup():
                 make_option += pre_setup.extra_make_option()
@@ -987,7 +1019,8 @@ class custom_build_ext(build_ext):
                 zmq_tarball_path = os.path.join(here, './zeromq-4.1.4.tar.gz')
                 # make_option += " WGET='curl -O '  ZMQ_URL=file://" + zmq_tarball_path + " "
 
-            make_process = subprocess.Popen('make ' + make_option,
+            make_target = 'ps ' if use_tp() else ''
+            make_process = subprocess.Popen('make ' + make_target + make_option,
                                             cwd='3rdparty/ps-lite',
                                             stdout=sys.stdout,
                                             stderr=sys.stderr,

@@ -37,6 +37,8 @@ const DataType TorchTensor::dtype() const {
       return DataType::BYTEPS_INT64;
     case ::torch::kHalf:
       return DataType::BYTEPS_FLOAT16;
+    case ::torch::kBFloat16:
+      return DataType::BYTEPS_BFLOAT16;
     case ::torch::kFloat:
       return DataType::BYTEPS_FLOAT32;
     case ::torch::kDouble:

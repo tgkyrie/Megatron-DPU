@@ -4,7 +4,13 @@ set -e
 # ===== RDMA & BytePS 基本配置 =====
 export BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH:-512}
 export BYTEPS_RDMA_START_DEPTH=${BYTEPS_RDMA_START_DEPTH:-32}
-export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
+if [ "${BYTEPS_USE_TP:-0}" = "1" ] || [ "${DMLC_PS_VAN_TYPE:-}" = "tp" ]; then
+  unset DMLC_ENABLE_RDMA
+  unset DMLC_ENABLE_UCX
+  export DMLC_PS_VAN_TYPE=${DMLC_PS_VAN_TYPE:-tp}
+else
+  export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
+fi
 
 export DMLC_NUM_WORKER=${DMLC_NUM_WORKER:-2}
 export DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-2}

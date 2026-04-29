@@ -20,6 +20,7 @@
 #include "./network_utils.h"
 #include "./rdma_van.h"
 #include "./resender.h"
+#include "./tp_van.h"
 #include "./ucx_van.h"
 #include "./zmq_van.h"
 #include "ps/base.h"
@@ -99,6 +100,10 @@ Van *Van::Create(const std::string &type, Postoffice *postoffice) {
 #ifdef DMLC_USE_UCX
   } else if (type == "ucx") {
     return new UCXVan(postoffice);
+#endif
+#ifdef DMLC_USE_TP
+  } else if (type == "tp") {
+    return new TPVan(postoffice);
 #endif
   } else {
     LOG(FATAL) << "unsupported van type: " << type;
