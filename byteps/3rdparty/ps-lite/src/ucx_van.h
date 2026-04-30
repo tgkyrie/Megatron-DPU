@@ -20,9 +20,13 @@
 
 #include <ucp/api/ucp.h>
 #include <atomic>
+#include <cstdlib>
+#include <cstring>
 #include <netdb.h>
 #include <queue>
 #include <set>
+#include <unordered_set>
+#include <vector>
 #include <chrono>
 #include <random>
 
@@ -70,6 +74,7 @@ std::mutex g_log_mutex;
     (_req)->data.raw_meta    = nullptr; \
     (_req)->data.should_stop = false; \
     (_req)->completed        = false; \
+    (_req)->status           = UCS_INPROGRESS; \
     ucp_request_free(_req); \
   } while(0)
 
@@ -96,6 +101,7 @@ struct UCXBuffer {
 struct UCXRequest {
   UCXContext *ctx;
   bool       completed;
+  ucs_status_t status;
   UCXBuffer  data;
 };
 
@@ -225,9 +231,7 @@ public:
     ucs_status_ptr_t req = ucp_am_send_nb(ucx_ep->ep, UCX_AM_NODE_INFO_REQ, &ucx_ep->id,
                                           sizeof(ucx_ep->id), ucp_dt_make_contig(1),
                                           AmReqCompletedCb, UCP_AM_SEND_REPLY);
-    if (UCS_PTR_IS_PTR(req)) {
-      ucp_request_free(req);
-    } else {
+    if (!UCS_PTR_IS_PTR(req)) {
       CHECK(!UCS_PTR_IS_ERR(req)) << "failed to send node info";
     }
   }
@@ -257,20 +261,35 @@ public:
   }
 
   void Cleanup() {
-    mu_.lock();
-    closing_.store(true);
-    for (auto& it : client_eps_) {
-      UCX_LOGE(3, "ep close in cleanup: " << it.first << "|"  << it.second->ep);
-      CloseEp(it.second->ep);
+    std::vector<ucp_ep_h> eps_to_close;
+    {
+      std::lock_guard<std::mutex> lock(mu_);
+      closing_.store(true);
+
+      for (auto& it : client_eps_) {
+        UCX_LOGE(3, "ep close in cleanup: " << it.first << "|"  << it.second->ep);
+        if (it.second->ep != nullptr) {
+          eps_to_close.push_back(it.second->ep);
+          it.second->ep = nullptr;
+          it.second->connected = false;
+        }
+      }
+
+      for (auto& it : server_eps_) {
+        UCX_LOGE(3, "ep close in cleanup: " << it->ep);
+        if (it->ep != nullptr) {
+          eps_to_close.push_back(it->ep);
+          it->ep = nullptr;
+          it->connected = false;
+        }
+      }
     }
 
-    for (auto& it : server_eps_) {
-      UCX_LOGE(3, "ep close in cleanup: " << it->ep);
-      CloseEp(it->ep);
+    for (auto ep : eps_to_close) {
+      CloseEp(ep);
     }
-    mu_.unlock();
 
-    UCX_LOGE(3, "ep close all, active reqs: " << close_ep_reqs_.size());
+    UCX_LOGE(3, "ep close all, active reqs: " << CloseReqSize());
     ProgressCloseRequests();
   }
 
@@ -281,32 +300,67 @@ public:
       return nullptr;
     }
 
+    std::lock_guard<std::mutex> ep_lock(it->second->mu);
     return (it->second->connected) ? it->second->ep : nullptr;
   }
+
+  bool Exists(const Node &node) {
+    std::lock_guard<std::mutex> lock(mu_);
+    for (int i = 0; i < node.num_ports; ++i) {
+      if (client_eps_.find(EpId(node.id, node.dev_ids[i])) != client_eps_.end()) {
+        return true;
+      }
+    }
+    return false;
+  }
+
  private:
-  void CloseEp(ucp_ep_h ep) {
+  size_t CloseReqSize() {
+    std::lock_guard<std::mutex> lock(close_mu_);
+    return close_ep_reqs_.size();
+  }
+
+  void CloseEp(ucp_ep_h ep, bool force = false) {
     if (ep == nullptr) {
       return;
     }
 
-    void *req = ucp_ep_close_nb(ep, UCP_EP_CLOSE_MODE_FLUSH);
+    {
+      std::lock_guard<std::mutex> lock(close_mu_);
+      if (closing_eps_.find(ep) != closing_eps_.end()) {
+        UCX_LOGE(3, "skip duplicate close ep " << ep);
+        return;
+      }
+      closing_eps_.insert(ep);
+    }
+
+    void *req = ucp_ep_close_nb(ep, force ? UCP_EP_CLOSE_MODE_FORCE
+                                          : UCP_EP_CLOSE_MODE_FLUSH);
     if (UCS_PTR_IS_PTR(req)) {
+      std::lock_guard<std::mutex> lock(close_mu_);
       close_ep_reqs_.push(req);
     } else {
       ucs_status_t status = UCS_PTR_STATUS(req);
-      if ((status != UCS_OK) && (status != UCS_ERR_ENDPOINT_TIMEOUT)) {
+      if ((status != UCS_OK) && (status != UCS_ERR_ENDPOINT_TIMEOUT) &&
+          (status != UCS_ERR_NOT_CONNECTED) && !force) {
         UCX_LOGE(1, "failed to flush close ep: " << ep << "("
                  << ucs_status_string(status) << "), try force close");
         req = ucp_ep_close_nb(ep, UCP_EP_CLOSE_MODE_FORCE);
         if (UCS_PTR_IS_PTR(req)) {
+          std::lock_guard<std::mutex> lock(close_mu_);
           close_ep_reqs_.push(req);
         } else {
           status = UCS_PTR_STATUS(req);
-          if ((status != UCS_OK) && (status != UCS_ERR_ENDPOINT_TIMEOUT)) {
+          if ((status != UCS_OK) && (status != UCS_ERR_ENDPOINT_TIMEOUT) &&
+              (status != UCS_ERR_NOT_CONNECTED)) {
             LOG(ERROR) << "failed to force close ep: " << ep << "("
                        << ucs_status_string(status) << ")";
           }
         }
+      } else if ((status != UCS_OK) && (status != UCS_ERR_ENDPOINT_TIMEOUT) &&
+                 (status != UCS_ERR_NOT_CONNECTED)) {
+        LOG(ERROR) << "failed to close ep: " << ep << "("
+                   << ucs_status_string(status) << ")";
       }
     }
 
@@ -314,15 +368,26 @@ public:
   }
 
   void ProgressCloseRequests() {
-    while (!close_ep_reqs_.empty()) {
+    while (true) {
+      void *req = nullptr;
+      {
+        std::lock_guard<std::mutex> lock(close_mu_);
+        if (close_ep_reqs_.empty()) {
+          break;
+        }
+        req = close_ep_reqs_.front();
+      }
       // There should not be concurrent access to rx_worker, because polling
       // thread is supposed to be joined already.
       ucp_worker_progress(rx_worker_);
       ucp_worker_progress(tx_worker_);
-      ucs_status_t status = ucp_request_check_status(close_ep_reqs_.front());
+      ucs_status_t status = ucp_request_check_status(req);
       if (status != UCS_INPROGRESS) {
-        ucp_request_free(close_ep_reqs_.front());
-        close_ep_reqs_.pop();
+        ucp_request_free(req);
+        std::lock_guard<std::mutex> lock(close_mu_);
+        if (!close_ep_reqs_.empty() && close_ep_reqs_.front() == req) {
+          close_ep_reqs_.pop();
+        }
       }
     }
   }
@@ -338,35 +403,55 @@ public:
     auto client_it    = std::find_if(client_eps_.begin(), client_eps_.end(),
                                      client_check);
     UCXEp *uep = (client_it != client_eps_.end()) ? client_it->second.get() : nullptr;
+    uint64_t uep_id = (client_it != client_eps_.end()) ? client_it->first : 0;
+    bool reconnect = false;
     mu_.unlock();
 
+    bool should_close = true;
     if (uep != nullptr) {
-      if (!uep->connected) {
-        uep->ep = nullptr;
+      bool connected = false;
+      {
+        std::lock_guard<std::mutex> ep_lock(uep->mu);
+        connected = uep->connected;
+        if (!connected) {
+          uep->ep = nullptr;
+        } else {
+          uep->connected = false;
+          if (uep->ep == ep) {
+            uep->ep = nullptr;
+          }
+        }
+      }
+      if (!connected) {
+        reconnect = true;
+        should_close = false;
         std::this_thread::sleep_for(std::chrono::milliseconds(reconnect_tmo_));
-        Create(uep);
-        UCX_LOGE(3, "ep close errh: " << ep << "|" << client_it->first
-                 << " Reconnect, close reqs " << close_ep_reqs_.size());
       } else {
-        UCX_LOGE(3, "ep close errh: " << ep << "|" << client_it->first
+        UCX_LOGE(3, "ep close errh: " << ep << "|" << uep_id
                  << " peer failure");
-        mu_.lock();
-        client_eps_.erase(client_it);
-        mu_.unlock();
       }
     } else {
       mu_.lock();
       auto server_check = [ep](const auto &mo) {return mo->ep == ep;};
       auto server_it    = std::find_if(server_eps_.begin(), server_eps_.end(),
                                        server_check);
-      // ep may not be present in the set if ep id is not arrived yet (see AmRxNodeInfoReq)
+      // Keep the endpoint object alive: UCX may still deliver callbacks that
+      // reference it while the error handler is running.
       if (server_it != server_eps_.end()) {
-        server_eps_.erase(server_it);
+        (*server_it)->connected = false;
+        (*server_it)->ep = nullptr;
       }
       mu_.unlock();
       UCX_LOGE(3, "ep close errh: " << ep);
     }
-    CloseEp(ep);
+    if (reconnect) {
+      Create(uep);
+      UCX_LOGE(3, "ep close errh: " << ep << "|" << uep_id
+               << " Reconnect, close reqs " << CloseReqSize());
+    }
+    if (should_close) {
+      CloseEp(ep, true);
+    }
   }
 
   uint64_t EpId(int node_id, int dev_id) {
@@ -377,17 +462,33 @@ public:
       return ep_id >> 32;
   }
 
+  static bool IsPeerCloseStatus(ucs_status_t status) {
+    return status == UCS_ERR_CONNECTION_RESET ||
+           status == UCS_ERR_NOT_CONNECTED ||
+           status == UCS_ERR_ENDPOINT_TIMEOUT;
+  }
+
   // UCX callbacks
   static void ErrorHandlerCb(void *arg, ucp_ep_h ep, ucs_status_t status)
   {
     UCXEndpointsPool *p = reinterpret_cast<UCXEndpointsPool*>(arg);
-    UCX_LOG_BASE(3, p->my_node_, "ERRH ep " << ep << ": " << ucs_status_string(status));
+    if (IsPeerCloseStatus(status)) {
+      UCX_LOG_BASE(2, p->my_node_, "UCX peer closed ep=" << ep
+                   << " status=" << ucs_status_string(status));
+    } else {
+      LOG(WARNING) << p->my_node_->ShortDebugString()
+                   << " UCX endpoint error ep=" << ep
+                   << " status=" << ucs_status_string(status);
+    }
     p->ErrorHandler(ep);
   }
 
   static void AmReqCompletedCb(void *request, ucs_status_t status)
   {
-    CHECK_STATUS(status) << "node info send failed: " << ucs_status_string(status);
+    if (status != UCS_OK) {
+      LOG(ERROR) << "node info send failed: " << ucs_status_string(status);
+    }
+    ucp_request_free(request);
   }
 
   static ucs_status_t AmRxNodeInfoReq(void *arg, void *data, size_t length,
@@ -401,19 +502,29 @@ public:
     UCX_LOG_BASE(3, p->my_node_, "ep create, got AM id " << id << " my id "
                  << p->my_node_->id <<", save " << reply_ep);
 
-    p->mu_.lock();
-    const auto se = p->server_eps_.emplace(std::make_unique<UCXEp>(reply_ep, id));
-    UCXEp *e = se.first->get();
-    p->mu_.unlock();
+    UCXEp *e = nullptr;
+    {
+      std::lock_guard<std::mutex> lock(p->mu_);
+      for (auto &it : p->server_eps_) {
+        if ((it->ep == reply_ep) || (it->id == id)) {
+          e = it.get();
+          e->ep = reply_ep;
+          e->id = id;
+          break;
+        }
+      }
+      if (e == nullptr) {
+        const auto se = p->server_eps_.emplace(std::make_unique<UCXEp>(reply_ep, id));
+        e = se.first->get();
+      }
+    }
 
     // Send reply to the peer, so it can set its ep to connected state
     ucs_status_ptr_t req = ucp_am_send_nb(reply_ep, UCX_AM_NODE_INFO_REPLY,
                                           &e->id, sizeof(e->id),
                                           ucp_dt_make_contig(1), AmReqCompletedCb,
                                           UCP_AM_SEND_REPLY);
-    if (UCS_PTR_IS_PTR(req)) {
-      ucp_request_free(req);
-    } else {
+    if (!UCS_PTR_IS_PTR(req)) {
       CHECK(!UCS_PTR_IS_ERR(req)) << "failed to send node info";
     }
 
@@ -427,24 +538,29 @@ public:
     UCXEndpointsPool *p = reinterpret_cast<UCXEndpointsPool*>(arg);
     uint64_t id         = *(reinterpret_cast<uint64_t*>(data));
 
-    UCX_LOG_BASE(3, p->my_node_, "ep create, got AM REPLY node id " << id
-                 << " ep " << reply_ep << " eps size " << p->client_eps_.size());
-    for(auto it = p->client_eps_.begin(); it != p->client_eps_.end(); ++it)
+    UCXEp *ep = nullptr;
     {
+      std::lock_guard<std::mutex> lock(p->mu_);
+      UCX_LOG_BASE(3, p->my_node_, "ep create, got AM REPLY node id " << id
+                   << " ep " << reply_ep << " eps size " << p->client_eps_.size());
+      for (auto it = p->client_eps_.begin(); it != p->client_eps_.end(); ++it) {
         UCX_LOG_BASE(3, p->my_node_, "Key " << it->first );
+      }
+      auto e = p->client_eps_.find(id);
+      if (e == p->client_eps_.end()) {
+        LOG(WARNING) << p->my_node_->ShortDebugString()
+                     << " got stale UCX AM reply for ep id " << id;
+        return UCS_OK;
+      }
+      ep = e->second.get();
+      std::lock_guard<std::mutex> lk(ep->mu);
+      if (ep->remote_addr != nullptr) {
+        freeaddrinfo(ep->remote_addr);
+        ep->remote_addr = nullptr;
+      }
+      ep->connected = true;
     }
-
-    p->mu_.lock();
-    auto e = p->client_eps_.find(id);
-    CHECK_NE(e, p->client_eps_.end());
-    p->mu_.unlock();
-
-    {
-      std::lock_guard<std::mutex> lk(e->second->mu);
-      freeaddrinfo(e->second->remote_addr);
-      e->second->connected = true;
-    }
-    e->second->cv.notify_one();
+    ep->cv.notify_one();
 
     return UCS_OK;
   }
@@ -457,6 +573,8 @@ public:
   std::unordered_set<std::unique_ptr<UCXEp>>           server_eps_;
   std::queue<void*>                                    close_ep_reqs_;
   std::mutex                                           mu_;
+  std::mutex                                           close_mu_;
+  std::unordered_set<ucp_ep_h>                         closing_eps_;
   ucp_worker_h                                         tx_worker_;
   ucp_worker_h                                         rx_worker_;
   Node                                                 *my_node_;
@@ -492,6 +610,7 @@ public:
       return addr->second;
     }
 
+    std::lock_guard<std::mutex> lock(r_pool_mtx_);
     if (rpool_.find(key) != rpool_.end()) {
       auto it = rpool_[key].find(node_id);
       if (it != rpool_[key].end()) {
@@ -519,6 +638,7 @@ public:
     uint64_t key = msg.meta.key;
     int sender   = msg.meta.sender;
 
+    std::lock_guard<std::mutex> lock(r_pool_mtx_);
     if (rpool_.find(key) != rpool_.end()) {
       auto it = rpool_[key].find(sender);
       if ((it != rpool_[key].end()) && (!it->second.external)) {
@@ -560,6 +680,7 @@ private:
   std::unordered_map<Key, char*>                    w_pool_;
   // rx buffer pool: key -> pool of node_ids
   std::unordered_map<Key, MemAddresses>             rpool_;
+  std::mutex                                        r_pool_mtx_;
   std::mutex                                        w_pool_mtx_;
 };
 
@@ -641,6 +762,13 @@ public:
   }
 
   void Connect(const Node &node) {
+    if (ep_pool_.Exists(node)) {
+      if (GetEnv("BYTEPS_UCX_CONNECT_LOG", 1)) {
+        LOG(INFO) << my_node_->ShortDebugString()
+                  << " UCX skip existing connection to " << node.DebugString();
+      }
+      return;
+    }
     if (GetEnv("BYTEPS_UCX_CONNECT_LOG", 1)) {
       LOG(INFO) << my_node_->ShortDebugString() << " UCX ctx dev="
                 << DeviceTypeName[src_dev_type_] << "[" << src_dev_idx_
@@ -697,10 +825,16 @@ public:
       if (msg != NULL) {
         // some meta data is ready, post a receive to get it
         UCXRequest *meta_req = PostRecvMeta(msg, &info);
-        if (meta_req->completed) {
+        if (meta_req != nullptr && meta_req->completed) {
           // meta data received immediately, can post receive for a real
           // data, because it's length is known from meta
-          PostRecvData(meta_req);
+          if (meta_req->status == UCS_OK) {
+            UCXBuffer data = meta_req->data;
+            PostRecvData(data);
+          } else {
+            HandleRecvError("meta-immediate", meta_req, meta_req->status);
+          }
+          UCX_REQUEST_FREE(meta_req);
         }
       }
     } while (msg != NULL);
@@ -801,56 +935,116 @@ private:
     return (int)(tag >> 48);
   }
 
-  void PostRecvData(UCXRequest *meta_req) {
-    RawMeta *meta = reinterpret_cast<RawMeta*>(meta_req->data.raw_meta);
+  void PostRecvData(UCXBuffer meta_data) {
+    RawMeta *meta = reinterpret_cast<RawMeta*>(meta_data.raw_meta);
     int val_len   = meta->val_len;
     if (meta->option == UCX_OPTION_META) {
-      UCX_LOGE(3, " rx just meta, sender " << meta_req->data.sender
+      UCX_LOGE(3, " rx just meta, sender " << meta_data.sender
                << " val_len: " << val_len);
-      CHECK_EQ(meta_req->data.buffer, nullptr);
-      rx_pool_->Push(meta_req->data);
+      CHECK_EQ(meta_data.buffer, nullptr);
+      rx_pool_->Push(meta_data);
     } else if (meta->option > 0) {
       UCX_LOGE(3, " rx meta with data, data len: " << val_len);
-      meta_req->data.buffer = rx_pool_->GetRxBuffer(meta->key, meta_req->data.sender,
-                                                    val_len, meta->push);
-      memcpy(meta_req->data.buffer, meta_req->data.raw_meta + meta->option, val_len);
-      rx_pool_->Push(meta_req->data);
+      UCXBuffer data = meta_data;
+      data.buffer = rx_pool_->GetRxBuffer(meta->key, meta_data.sender,
+                                          val_len, meta->push);
+      memcpy(data.buffer, meta_data.raw_meta + meta->option, val_len);
+      rx_pool_->Push(data);
     } else {
       CHECK_EQ(meta->option, UCX_OPTION_DATA);
       // Add sender id to the tag to ensure message received from the proper node
-      char *buf       = rx_pool_->GetRxBuffer(meta->key, meta_req->data.sender,
+      char *buf       = rx_pool_->GetRxBuffer(meta->key, meta_data.sender,
                                               val_len, meta->push);
-      ucp_tag_t tag   = MakeTag(meta_req->data.sender, Tags::UCX_TAG_DATA,
+      ucp_tag_t tag   = MakeTag(meta_data.sender, Tags::UCX_TAG_DATA,
                                 meta->key);
-      UCXRequest *req = (UCXRequest*)ucp_tag_recv_nb(rx_worker_, buf, val_len,
-                                                     ucp_dt_make_contig(1), tag,
-                                                     std::numeric_limits<uint64_t>::max(),
-                                                     RxDataCompletedCb);
-      req->data.raw_meta    = meta_req->data.raw_meta;
-      req->data.sender      = meta_req->data.sender;
+      void *recv_req = ucp_tag_recv_nb(rx_worker_, buf, val_len,
+                                       ucp_dt_make_contig(1), tag,
+                                       std::numeric_limits<uint64_t>::max(),
+                                       RxDataCompletedCb);
+      if (UCS_PTR_IS_ERR(recv_req)) {
+        ucs_status_t status = UCS_PTR_STATUS(recv_req);
+        LOG(ERROR) << my_node_->ShortDebugString()
+                   << " failed to post UCX data recv: "
+                   << ucs_status_string(status)
+                   << ", sender=" << meta_data.sender
+                   << ", key=" << meta->key
+                   << ", len=" << val_len
+                   << ", tag=" << tag;
+        if (Van::err_handle_ != nullptr) {
+          std::string reason = "failed to post UCX data recv: " +
+                               std::string(ucs_status_string(status));
+          Van::err_handle_(&status, GetErrorCode(status), reason);
+        }
+        delete [] meta_data.raw_meta;
+        return;
+      }
+      UCXBuffer data = meta_data;
+      data.buffer = buf;
+      if (!UCS_PTR_IS_PTR(recv_req)) {
+        ucs_status_t status = UCS_PTR_STATUS(recv_req);
+        CHECK_STATUS(status) << "ucp_tag_recv_nb failed with "
+                             << ucs_status_string(status);
+        rx_pool_->Push(data);
+        return;
+      }
+      UCXRequest *req = reinterpret_cast<UCXRequest*>(recv_req);
+      req->data.raw_meta    = meta_data.raw_meta;
+      req->data.sender      = meta_data.sender;
       req->data.buffer      = buf;
       req->data.should_stop = false;
       req->ctx              = this;
       UCX_LOGE(3, "rx meta, post recv for data, len " << val_len << ", tag " << tag);
       if (req->completed) {
-        rx_pool_->Push(req->data);
+        if (req->status == UCS_OK) {
+          rx_pool_->Push(req->data);
+        } else {
+          HandleRecvError("data-immediate", req, req->status);
+        }
         UCX_REQUEST_FREE(req);
       }
     }
     // if request is not completed in-place, it will be handled
     // in RxDataCompletedCb callback
-
-    UCX_REQUEST_FREE(meta_req); // meta req is not needed anymore
   }
 
   UCXRequest* PostRecvMeta(ucp_tag_message_h msg, ucp_tag_recv_info_t *info) {
     char *rmeta     = new char[info->length];
-    UCXRequest *req = (UCXRequest*)ucp_tag_msg_recv_nb(rx_worker_, rmeta, info->length,
-                                                       ucp_dt_make_contig(1), msg,
-                                                       RxMetaCompletedCb);
+    void *recv_req  = ucp_tag_msg_recv_nb(rx_worker_, rmeta, info->length,
+                                          ucp_dt_make_contig(1), msg,
+                                          RxMetaCompletedCb);
+    int sender      = NodeIdFromTag(info->sender_tag);
+    if (UCS_PTR_IS_ERR(recv_req)) {
+      ucs_status_t status = UCS_PTR_STATUS(recv_req);
+      LOG(ERROR) << my_node_->ShortDebugString()
+                 << " failed to receive UCX meta: "
+                 << ucs_status_string(status)
+                 << ", sender=" << sender
+                 << ", tag=" << info->sender_tag
+                 << ", len=" << info->length;
+      if (Van::err_handle_ != nullptr) {
+        std::string reason = "failed to receive UCX meta: " +
+                             std::string(ucs_status_string(status));
+        Van::err_handle_(&status, GetErrorCode(status), reason);
+      }
+      delete [] rmeta;
+      return nullptr;
+    }
+    if (!UCS_PTR_IS_PTR(recv_req)) {
+      ucs_status_t status = UCS_PTR_STATUS(recv_req);
+      CHECK_STATUS(status) << "ucp_tag_msg_recv_nb failed with "
+                           << ucs_status_string(status);
+      UCXBuffer data;
+      data.raw_meta    = rmeta;
+      data.buffer      = nullptr;
+      data.sender      = sender;
+      data.should_stop = false;
+      PostRecvData(data);
+      return nullptr;
+    }
+    UCXRequest *req = reinterpret_cast<UCXRequest*>(recv_req);
     req->ctx              = this;
     req->data.raw_meta    = rmeta;
-    req->data.sender      = NodeIdFromTag(info->sender_tag);
+    req->data.sender      = sender;
     req->data.should_stop = false;
     UCX_LOGE(3, " rx meta, sender " << req->data.sender << " tag "
              << info->sender_tag << " compl " << req->completed);
@@ -859,10 +1053,50 @@ private:
 
   static void RequestInit(void *request) {
     UCXRequest *req       = reinterpret_cast<UCXRequest*>(request);
+    req->ctx              = nullptr;
     req->data.buffer      = nullptr;
     req->data.raw_meta    = nullptr;
     req->data.should_stop = false;
     req->completed        = false;
+    req->status           = UCS_INPROGRESS;
+  }
+
+  void HandleRecvError(const char *phase, UCXRequest *req, ucs_status_t status) {
+    int sender = (req != nullptr) ? req->data.sender : -1;
+    uint64_t key = 0;
+    int option = 0;
+    int val_len = 0;
+    if ((req != nullptr) && (req->data.raw_meta != nullptr) &&
+        (req->data.buffer != nullptr)) {
+      RawMeta *meta = reinterpret_cast<RawMeta*>(req->data.raw_meta);
+      key = meta->key;
+      option = meta->option;
+      val_len = meta->val_len;
+    }
+
+    LOG(ERROR) << my_node_->ShortDebugString()
+               << " UCX " << phase << " recv failed: "
+               << ucs_status_string(status)
+               << ", sender=" << sender
+               << ", key=" << key
+               << ", option=" << option
+               << ", val_len=" << val_len
+               << ", raw_meta="
+               << ((req != nullptr) ? static_cast<void*>(req->data.raw_meta) : nullptr)
+               << ", buffer="
+               << ((req != nullptr) ? static_cast<void*>(req->data.buffer) : nullptr);
+    if (Van::err_handle_ != nullptr) {
+      std::string reason = std::string("UCX ") + phase + " recv failed: " +
+                           std::string(ucs_status_string(status));
+      Van::err_handle_(&status, GetErrorCode(status), reason);
+    }
+    if ((req != nullptr) && (req->data.raw_meta != nullptr)) {
+      delete [] req->data.raw_meta;
+      req->data.raw_meta = nullptr;
+    }
+    if (req != nullptr) {
+      req->data.buffer = nullptr;
+    }
   }
 
   // UCX Callbacks
@@ -875,18 +1109,20 @@ private:
                                 ucp_tag_recv_info_t *info)
   {
     UCXRequest *req = reinterpret_cast<UCXRequest*>(request);
-    if (status != UCS_OK && Van::err_handle_ != nullptr) {
-      std::string reason = "RxMetaCompletedCb failed with " + std::string(ucs_status_string(status));
-      Van::err_handle_(&status, GetErrorCode(status), reason);
-    } else {
-      CHECK_STATUS(status) << "RxMetaCompletedCb failed with " << ucs_status_string(status);
-    }
+    req->status = status;
     req->completed = true;
     if (req->data.raw_meta == nullptr) {
       // immediate completion
       return;
     }
-    req->ctx->PostRecvData(req);
+    if (status != UCS_OK) {
+      req->ctx->HandleRecvError("meta-callback", req, status);
+      UCX_REQUEST_FREE(req);
+      return;
+    }
+    UCXBuffer data = req->data;
+    req->ctx->PostRecvData(data);
+    UCX_REQUEST_FREE(req);
   }
 
   static void RxDataCompletedCb(void *request, ucs_status_t status,
@@ -894,15 +1130,15 @@ private:
   {
     UCXRequest *req = reinterpret_cast<UCXRequest*>(request);
 
-    if (status != UCS_OK && Van::err_handle_ != nullptr) {
-      std::string reason = "RxDataCompletedCb failed with " + std::string(ucs_status_string(status));
-      Van::err_handle_(&status, GetErrorCode(status), reason);
-    } else {
-      CHECK_STATUS(status) << "RxDataCompletedCb failed with " << ucs_status_string(status);
-    }
+    req->status = status;
     req->completed = true;
     if (req->data.buffer == nullptr) {
       // immediate completion
+      return;
+    }
+    if (status != UCS_OK) {
+      req->ctx->HandleRecvError("data-callback", req, status);
+      UCX_REQUEST_FREE(req);
       return;
     }
     req->ctx->rx_pool_->Push(req->data);
@@ -940,10 +1176,15 @@ class UCXVan : public Van {
  public:
 
   UCXVan(Postoffice* postoffice) : Van(postoffice), postoffice_(postoffice) {
-    short_send_thresh_   = GetEnv("BYTEPS_UCX_SHORT_THRESH", 4096);
+    short_send_thresh_   = GetEnv("BYTEPS_UCX_SHORT_THRESH", 0);
     force_request_order_ = GetEnv("BYTEPS_UCX_FORCE_REQ_ORDER", 0);
     queue_sends_         = GetEnv("BYTEPS_UCX_QUEUE_SENDS", 0);
     connect_log_         = GetEnv("BYTEPS_UCX_CONNECT_LOG", 1);
+    if (queue_sends_) {
+      LOG(WARNING) << "BYTEPS_UCX_QUEUE_SENDS is disabled because queued UCX "
+                   << "sends can outlive the caller-owned data buffer";
+      queue_sends_ = 0;
+    }
     if (!getenv("UCX_USE_MT_MUTEX") && !getenv("PSLITE_UCX_USE_MT_MUTEX")) {
       LOG(FATAL) << "PSLITE_UCX_USE_MT_MUTEX is not set. Please export PSLITE_UCX_USE_MT_MUTEX=y";
     }
@@ -969,6 +1210,7 @@ class UCXVan : public Van {
   void RequestLocalStop() override {
     Message exit;
     exit.meta.control.cmd = Control::TERMINATE;
+    exit.meta.option = UCX_OPTION_META;
     exit.meta.recver = my_node_.id;
     exit.meta.sender = my_node_.id;
     exit.meta.customer_id = 0;
@@ -1198,15 +1440,21 @@ class UCXVan : public Van {
     if (IsDataMsg(msg) && (msg.meta.src_dev_type == CPU) &&
         (msg.meta.val_len <= short_send_thresh_)) {
       // Bundle data with meta, save meta length in option (for parsing on Server).
-      // Note that only CPU data can be bundled with meta, because UCX does not yet
-      // support iov types for GPU memory.
+      // Copy the small CPU payload into the UCX-owned send buffer. The UCP send
+      // may complete after this Message is destroyed, so iov must not point to
+      // msg.data[1] directly.
       msg.meta.option   = GetPackMetaLen(msg.meta);
-      meta_buf          = new char[msg.meta.option + sizeof(ucp_dt_iov_t)*2];
+      meta_buf          = new char[msg.meta.option + sizeof(ucp_dt_iov_t) * 2 +
+                                   msg.meta.val_len];
       PackMeta(msg.meta, &meta_buf, &meta_size);
       ucp_dt_iov_t *iov = reinterpret_cast<ucp_dt_iov_t*>(meta_buf + meta_size);
+      char *data_buf     = meta_buf + msg.meta.option + sizeof(ucp_dt_iov_t) * 2;
+      if (msg.meta.val_len > 0) {
+        memcpy(data_buf, msg.data[1].data(), msg.meta.val_len);
+      }
       iov[0].buffer     = meta_buf;
       iov[0].length     = meta_size;
-      iov[1].buffer     = msg.data[1].data();
+      iov[1].buffer     = data_buf;
       iov[1].length     = msg.meta.val_len;
       data_size         = msg.meta.val_len;
       req.buf           = iov;
@@ -1405,7 +1653,7 @@ class UCXVan : public Van {
         ucs_status_ptr_t st = ContextById(req.src_dev_id)->Send(req);
         if (!UCS_PTR_IS_PTR(st)) {
             // Send was completed immediately
-            delete[] req.user_data;
+            delete [] static_cast<char*>(req.user_data);
             if (UCS_PTR_IS_ERR(st)) {
                 LOG(ERROR) << "failed to send data: " << ucs_status_string(UCS_PTR_STATUS(st));
             }
