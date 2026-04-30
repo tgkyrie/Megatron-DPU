@@ -21,14 +21,6 @@ ENV BYTEPS_UCX_HOME=${UCX_PREFIX}
 ENV BYTEPS_FORCE_NO_CUDA=1
 ENV BYTEPS_UCX_WITH_CUDA=0
 ENV BYTEPS_PSLITE_WITH_CUDA=0
-ENV DMLC_ENABLE_UCX=1
-ENV PSLITE_UCX_USE_MT_MUTEX=y
-ENV UCX_RNDV_THRESH=8k
-ENV PSLITE_UCX_RNDV_THRESH=8k
-ENV UCX_IB_TRAFFIC_CLASS=106
-ENV UCX_WARN_UNUSED_ENV_VARS=n
-ENV UCX_SOCKADDR_CM_ENABLE=y
-ENV BYTEPS_UCX_SHORT_THRESH=0
 
 WORKDIR ${BYTEPS_BASE_PATH}
 
@@ -83,14 +75,12 @@ RUN set -eux; \
     rm -rf /tmp/ucx
 
 ENV PATH="${BYTEPS_UCX_HOME}/bin:/usr/local/bin:${PATH}"
-ENV LD_LIBRARY_PATH="${BYTEPS_UCX_HOME}/lib:${LD_LIBRARY_PATH}"
+ENV LD_LIBRARY_PATH="${BYTEPS_UCX_HOME}/lib"
 
-COPY ./byteps/sh/server.sh \
-     ./byteps/sh/scheduler.sh \
-     /usr/local/
-
+# Convenience launch scripts.
+COPY ./byteps/sh/ /usr/local/
 RUN set -eux; \
-    chmod +x /usr/local/server.sh /usr/local/scheduler.sh
+    chmod +x /usr/local/*.sh
 
 COPY ./byteps/ ${BYTEPS_PATH}/
 

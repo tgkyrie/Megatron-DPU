@@ -55,27 +55,14 @@ RUN set -eux; \
     rm -rf /tmp/ucx
 
 WORKDIR ${BYTEPS_BASE_PATH}
+# Convenience launch scripts.
+COPY ./byteps/sh/ /usr/local/
+RUN chmod +x /usr/local/*.sh
 # 将本地仓库中的 byteps 目录（Megatron-DPU/byteps）作为构建源
 COPY ./byteps/ ${BYTEPS_BASE_PATH}/byteps/
-# Worker-side launch scripts.
-COPY ./byteps/sh/worker.sh \
-     ./byteps/sh/worker_ddp.sh \
-     ./byteps/sh/worker_single.sh \
-     ./byteps/sh/pushpull.sh \
-     ./byteps/sh/allreduce.sh \
-     /usr/local/
-RUN chmod +x /usr/local/worker.sh /usr/local/worker_ddp.sh /usr/local/worker_single.sh /usr/local/pushpull.sh /usr/local/allreduce.sh
 
 # Enable UCX in BytePS build (ps-lite UCXVan)
 ENV BYTEPS_WITH_UCX=1
-ENV DMLC_ENABLE_UCX=1
-ENV PSLITE_UCX_USE_MT_MUTEX=y
-ENV UCX_RNDV_THRESH=8k
-ENV PSLITE_UCX_RNDV_THRESH=8k
-ENV UCX_IB_TRAFFIC_CLASS=106
-ENV UCX_WARN_UNUSED_ENV_VARS=n
-ENV UCX_SOCKADDR_CM_ENABLE=y
-ENV BYTEPS_UCX_SHORT_THRESH=0
 ENV PATH="${BYTEPS_UCX_HOME}/bin:/usr/local/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${BYTEPS_UCX_HOME}/lib:${LD_LIBRARY_PATH}"
 
