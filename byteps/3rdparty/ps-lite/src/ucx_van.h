@@ -1369,6 +1369,11 @@ class UCXVan : public Van {
     if (IsValidPushpull(msg)) {
       if (msg.meta.request) {
         msg.meta.key = DecodeKey(msg.data[0]);
+        if (msg.meta.push && msg.meta.addr != 0) {
+          // Fused push_pull sends push data while carrying the pull target.
+          // Cache that target so the later pull response can land in-place.
+          rx_pool_->CacheLocalAddress(msg.meta.key, (char*)msg.meta.addr);
+        }
         // sequence id
         std::lock_guard<std::mutex> lk(sid_mtx_);
         int sid             = next_send_sids_[id] % MAX_SID_COUNT;

@@ -785,8 +785,10 @@ class RDMAVan : public Van {
       }
       ++sa_cnt;
     }
-    // register for tensor address of pull request
-    if (IsValidPushpull(msg) && !msg.meta.push && msg.meta.request) {
+    // Register the local target buffer for pull responses. In fused
+    // push_pull, the push request also carries that target address.
+    if (IsValidPushpull(msg) && msg.meta.request &&
+        (!msg.meta.push || msg.meta.addr != 0)) {
       CHECK_GT(msg.meta.val_len, 0) << msg.meta.val_len;
       auto addr = reinterpret_cast<char*>(msg.meta.addr);
       std::lock_guard<std::mutex> lock(map_mu_);
@@ -819,8 +821,8 @@ class RDMAVan : public Van {
     if (msg.meta.request) {
       msg.meta.key = DecodeKey(msg.data[0]);
     }
-    if (!msg.meta.push && msg.meta.request) {
-      // pull request
+    if (msg.meta.request && (!msg.meta.push || msg.meta.addr != 0)) {
+      // pull request, or fused push_pull carrying the pull target
       std::lock_guard<std::mutex> lock(map_mu_);
       auto val_addr = reinterpret_cast<char*>(msg.meta.addr);
       msg.meta.option = mem_mr_[val_addr]->rkey;

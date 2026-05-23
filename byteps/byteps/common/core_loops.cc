@@ -578,21 +578,35 @@ bool RunPushLoopOnce() {
       // get metadata
       const int dtype = task->tensor->dtype();
 
+      bool used_compressed = false;
       // use compressed data/len
       if (task->compressed) {
         BPS_LOG(DEBUG) << "PUSH with gradient compression. key=" << task->key;
         data = task->compressed->data;
         len = task->compressed->size;
         task->compressed = nullptr;
+        used_compressed = true;
       }
 
       // false means not to delete data when SArray is deleted
       ps::SArray<char> vals(data, len, false);
-
-      int cmd = GetCommandType(RequestType::kDefaultPushPull, dtype);
       auto &pskv = BytePSGlobal::EncodeDefaultKey(task->key, len);
-      BytePSGlobal::GetPS()->ZPush(pskv.keys, vals, pskv.lens, cmd,
-                                   [task, q]() { FinishOrProceed(task); });
+      if (IsFusedPushPullEnabled()) {
+        BPS_CHECK(!used_compressed)
+            << "BYTEPS_ENABLE_FUSED_PUSH_PULL does not support compression";
+        auto pull_vals = new ps::SArray<char>(data, len, false);
+        int cmd = GetCommandType(RequestType::kFusedPushPull, dtype);
+        BytePSGlobal::GetPS()->ZFusedPushPull(
+            pskv.keys, vals, pull_vals, pskv.lens, cmd,
+            [pull_vals, task]() {
+              delete pull_vals;
+              FinishOrProceed(task);
+            });
+      } else {
+        int cmd = GetCommandType(RequestType::kDefaultPushPull, dtype);
+        BytePSGlobal::GetPS()->ZPush(pskv.keys, vals, pskv.lens, cmd,
+                                     [task, q]() { FinishOrProceed(task); });
+      }
     } else {
       // This is a dummy barrier for IsCrossPcieSwitch()
       BPS_CHECK(BytePSGlobal::IsCrossPcieSwitch());

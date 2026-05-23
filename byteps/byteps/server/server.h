@@ -40,7 +40,8 @@ namespace server {
 using namespace ps;
 
 enum class RequestType {
-  kDefaultPushPull, kRowSparsePushPull, kCompressedPushPull, kGroupRegister
+  kDefaultPushPull, kRowSparsePushPull, kCompressedPushPull, kGroupRegister,
+  kFusedPushPull
 };
 
 enum BytePSEngineOperation {

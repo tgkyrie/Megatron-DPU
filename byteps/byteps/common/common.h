@@ -270,10 +270,12 @@ enum class RequestType {
   kDefaultPushPull,
   kRowSparsePushPull,
   kCompressedPushPull,
-  kGroupRegister
+  kGroupRegister,
+  kFusedPushPull
 };
 
 int GetCommandType(RequestType requestType, int d);
+bool IsFusedPushPullEnabled();
 
 #ifndef BYTEPS_BUILDING_SERVER
 ncclDataType_t getNcclDataType(DataType dtype);

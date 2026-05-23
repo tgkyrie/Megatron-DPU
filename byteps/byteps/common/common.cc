@@ -15,6 +15,7 @@
 // =============================================================================
 
 #include <cassert>
+#include <cstdlib>
 #include <sstream>
 
 #include "common.h"
@@ -98,6 +99,14 @@ int64_t TensorShape::num_elements() const {
 int GetCommandType(RequestType requestType, int d) {
   int m = static_cast<int>(requestType);
   return (((m + d) * (m + d + 1)) / 2) + d;
+}
+
+bool IsFusedPushPullEnabled() {
+  static bool enabled = [] {
+    const char* v = getenv("BYTEPS_ENABLE_FUSED_PUSH_PULL");
+    return !v || atoi(v) != 0;
+  }();
+  return enabled;
 }
 
 #ifndef BYTEPS_BUILDING_SERVER
