@@ -40,13 +40,31 @@ export SEED=${SEED:-1234}
 
 # Keep GDR disabled by default unless you have
 # already validated the GDR build/runtime path.
-# RDMA配置 - 修复ENOMEM错误
 export DMLC_USE_GDR=${DMLC_USE_GDR:-0}
-export BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH:-512}
 export BYTEPS_RDMA_START_DEPTH=${BYTEPS_RDMA_START_DEPTH:-32}
-export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
-
-export BYTEPS_PARTITION_BYTES=${BYTEPS_PARTITION_BYTES:-1048576}
+export BYTEPS_ENABLE_FUSED_PUSH_PULL=${BYTEPS_ENABLE_FUSED_PUSH_PULL:-1}
+export DMLC_ENABLE_UCX=${DMLC_ENABLE_UCX:-0}
+if [[ "${DMLC_ENABLE_UCX}" == "1" ]]; then
+    export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-0}
+    export UCX_TLS=${UCX_TLS:-rc}
+    export UCX_NET_DEVICES=${UCX_NET_DEVICES:-mlx5_0:1,mlx5_1:1}
+    export UCX_MAX_EAGER_RAILS=${UCX_MAX_EAGER_RAILS:-2}
+    export UCX_MAX_RNDV_RAILS=${UCX_MAX_RNDV_RAILS:-2}
+    export UCX_RNDV_THRESH=${UCX_RNDV_THRESH:-8k}
+    export UCX_IB_TRAFFIC_CLASS=${UCX_IB_TRAFFIC_CLASS:-106}
+    export PSLITE_UCX_IB_TRAFFIC_CLASS=${PSLITE_UCX_IB_TRAFFIC_CLASS:-106}
+    export UCX_WARN_UNUSED_ENV_VARS=${UCX_WARN_UNUSED_ENV_VARS:-n}
+    export PSLITE_UCX_USE_MT_MUTEX=${PSLITE_UCX_USE_MT_MUTEX:-y}
+    export PSLITE_UCX_RNDV_SCHEME=${PSLITE_UCX_RNDV_SCHEME:-put_zcopy}
+    export BYTEPS_PARTITION_BYTES=${BYTEPS_PARTITION_BYTES:-4194304}
+    export BYTEPS_ADDRESS_POOL_SIZE=${BYTEPS_ADDRESS_POOL_SIZE:-20480}
+    export BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH:-512}
+else
+    export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
+    export BYTEPS_PARTITION_BYTES=${BYTEPS_PARTITION_BYTES:-2097152}
+    export BYTEPS_ADDRESS_POOL_SIZE=${BYTEPS_ADDRESS_POOL_SIZE:-20480}
+    export BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH:-256}
+fi
 
 extract_primary_hca() {
     local hca="${NCCL_IB_HCA:-}"
@@ -124,7 +142,11 @@ export MASTER_ADDR="${MASTER_ADDR_VALUE}"
 export DMLC_PS_ROOT_URI="${DMLC_PS_ROOT_URI_VALUE}"
 
 # Keep device visibility ordered and let torchrun bind local rank to GPU index.
-export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1}   # 多机单卡，必要时可从外部覆盖
+if [[ "${DMLC_ENABLE_UCX}" == "1" ]]; then
+    export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-0}
+else
+    export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1}
+fi
 
 ############################################
 # BytePS TP-only requirements
@@ -160,6 +182,7 @@ KV_CHANNELS=${KV_CHANNELS:-128}
 
 SEQ_LENGTH=${SEQ_LENGTH:-6144}
 MAX_POSITION_EMBEDDINGS=${MAX_POSITION_EMBEDDINGS:-8192}
+VOCAB_SIZE=${VOCAB_SIZE:-4096}
 
 DTYPE=${DTYPE:-fp32}
 
@@ -309,7 +332,7 @@ if [[ "$TOKENIZER_ARG" == "MOCK" ]] || [[ "$DATA_ARG" == "MOCK" ]]; then
     DATA_ARGS_LIST+=(
         --mock-data
         --tokenizer-type NullTokenizer
-        --vocab-size 4096
+        --vocab-size "$VOCAB_SIZE"
         --split '99,1,0'
         --no-mmap-bin-files
         --num-workers 1
@@ -319,7 +342,7 @@ else
         --data-path "$DATA_ARG"
         --tokenizer-type HuggingFaceTokenizer
         --tokenizer-model "$TOKENIZER_ARG"
-        --vocab-size 4096
+        --vocab-size "$VOCAB_SIZE"
         --data-cache-path "$DATA_CACHE_PATH"
         --split '99,1,0'
         --no-mmap-bin-files
@@ -356,6 +379,9 @@ CMD=(python "$PRETRAIN_SCRIPT_PATH"
 ############################################
 echo "[net] HCA=${PRIMARY_HCA:-unset} IF=${DMLC_INTERFACE} LOCAL_IP=${LOCAL_DETECTED_IP:-unset} MASTER_ADDR=${MASTER_ADDR} ROOT=${DMLC_PS_ROOT_URI}"
 echo "[dpu] USE_DPU=${USE_DPU}"
+echo "[byteps-net] DMLC_ENABLE_UCX=${DMLC_ENABLE_UCX} DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA} DMLC_USE_GDR=${DMLC_USE_GDR} BYTEPS_PARTITION_BYTES=${BYTEPS_PARTITION_BYTES} BYTEPS_ADDRESS_POOL_SIZE=${BYTEPS_ADDRESS_POOL_SIZE} BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH}"
+echo "[model] NUM_LAYERS=${NUM_LAYERS} HIDDEN_SIZE=${HIDDEN_SIZE} FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE} NUM_HEADS=${NUM_HEADS} KV_CHANNELS=${KV_CHANNELS} VOCAB_SIZE=${VOCAB_SIZE}"
+echo "[model] SEQ_LENGTH=${SEQ_LENGTH} MAX_POSITION_EMBEDDINGS=${MAX_POSITION_EMBEDDINGS}"
 echo "[run] TRAIN_ITERS=${TRAIN_ITERS} EVAL_INTERVAL=${EVAL_INTERVAL} EVAL_ITERS=${EVAL_ITERS} SEED=${SEED}"
 echo "[numa] NUMA_NODE=${NUMA_NODE} CPU_LIST='${CPU_LIST}' IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST}"
 

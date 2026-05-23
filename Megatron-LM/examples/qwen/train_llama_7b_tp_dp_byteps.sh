@@ -10,7 +10,7 @@ set -euo pipefail
 # 2. DP gradient sync via --use-dpu-reduce when USE_DPU_DP=1
 # 3. TP all-reduce via --use-dpu-tp-reduce when USE_DPU_TP=1
 # 4. All communication goes through cross-node RDMA network
-# 5. Defaults match LLaMA-2-7B shape, with TP_SIZE=2 and DP_SIZE=WORLD_SIZE/2
+# 5. Defaults use LLaMA-2-7B shape with benchmark seq/vocab.
 ############################################
 
 ############################################
@@ -200,9 +200,9 @@ NUM_HEADS=${NUM_HEADS:-32}
 FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE:-11008}
 KV_CHANNELS=${KV_CHANNELS:-128}
 
-SEQ_LENGTH=${SEQ_LENGTH:-4096}
+SEQ_LENGTH=${SEQ_LENGTH:-256}
 MAX_POSITION_EMBEDDINGS=${MAX_POSITION_EMBEDDINGS:-4096}
-VOCAB_SIZE=${VOCAB_SIZE:-32000}
+VOCAB_SIZE=${VOCAB_SIZE:-7936}
 NORMALIZATION=${NORMALIZATION:-RMSNorm}
 NORM_EPSILON=${NORM_EPSILON:-1e-5}
 ROTARY_BASE=${ROTARY_BASE:-10000}

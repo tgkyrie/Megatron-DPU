@@ -139,6 +139,36 @@ void SendPullResponse(KeyState* state, const DataHandleType type,
   logger_.record_event("pull resp end.key." + std::to_string(key));
 }
 
+void QueueFusedPullMeta(KeyState* state, const ps::KVMeta& req_meta) {
+  ps::KVMeta pull_meta = req_meta;
+  pull_meta.push = false;
+  state->q_pull_reqmeta.push_back(pull_meta);
+}
+
+void FlushQueuedPullResponses(KeyState* state, const DataHandleType type,
+                              const uint64_t key,
+                              ps::KVServer<char>* server) {
+  state->is_push_finished = true;
+
+  auto it = state->q_pull_reqmeta.begin();
+  while (it != state->q_pull_reqmeta.end()) {
+    if (state->seen_sender.find(it->sender) == state->seen_sender.end()) {
+      SendPullResponse(state, type, key, *it, server);
+      state->pull_cnt += 1;
+      state->seen_sender.insert(it->sender);
+      it = state->q_pull_reqmeta.erase(it);
+    } else {
+      ++it;
+    }
+    if (state->pull_cnt == (size_t)GetExpectedWorkers(*state)) {
+      state->is_push_finished = false;
+      state->pull_cnt = 0;
+      state->seen_sender.clear();
+      break;
+    }
+  }
+}
+
 void BytePSServerEngineThread(int i) {
   auto& q = engine_queues_[i];
   while (true) {
@@ -214,25 +244,7 @@ void BytePSServerEngineThread(int i) {
 
       case ALL_RECV: {
         std::lock_guard<std::mutex> lock(state->mu);
-        state->is_push_finished = true;
-
-        auto it = state->q_pull_reqmeta.begin();
-        while (it != state->q_pull_reqmeta.end()) {
-          if (state->seen_sender.find(it->sender) == state->seen_sender.end()) {
-            SendPullResponse(state.get(), msg.type, msg.key, *it, byteps_server_);
-            state->pull_cnt += 1;
-            state->seen_sender.insert(it->sender);
-            it = state->q_pull_reqmeta.erase(it);
-          } else {
-            ++it;
-          }
-          if (state->pull_cnt == (size_t)GetExpectedWorkers(*state)) {
-            state->is_push_finished = false;
-            state->pull_cnt = 0;
-            state->seen_sender.clear();
-            break;
-          }
-        }
+        FlushQueuedPullResponses(state.get(), msg.type, msg.key, byteps_server_);
       } break;
 
       case SUM_RECV: {
@@ -282,6 +294,13 @@ void BytePSHandler(const ps::KVMeta& req_meta,
     global_lock.lock();
   }
   DataHandleType type = DepairDataHandleType(req_meta.cmd);
+  bool fused_push_pull =
+      req_meta.push && type.requestType == RequestType::kFusedPushPull;
+  if (fused_push_pull) {
+    CHECK(req_meta.push) << "fused push_pull must arrive as a push request";
+    CHECK(sync_mode_) << "fused push_pull only supports sync mode";
+    CHECK_EQ(type.requestType, RequestType::kFusedPushPull);
+  }
   // CHECK_EQ(type.requestType, RequestType::kDefaultPushPull);
   // do some check
   CHECK_EQ(req_data.keys.size(), (size_t)1);
@@ -361,6 +380,9 @@ void BytePSHandler(const ps::KVMeta& req_meta,
       }
       // buffer the request meta
       updates.request.push_back(req_meta);
+      if (fused_push_pull) {
+        QueueFusedPullMeta(state.get(), req_meta);
+      }
       // should send response after collecting all init push
       if (updates.request.size() < (size_t)GetExpectedWorkers(*state)) return;
       // init stored buffer, use page aligned memory
@@ -373,8 +395,12 @@ void BytePSHandler(const ps::KVMeta& req_meta,
       memset(stored.tensor, 0, stored.len);
       //   bps_reducer_->copy(stored->tensor, recved,
       //                      len);  // we may not need this copy
-      for (const auto& req : updates.request) {
-        SendPushResponse(state.get(), key, req, server);
+      if (fused_push_pull) {
+        FlushQueuedPullResponses(state.get(), type, key, server);
+      } else {
+        for (const auto& req : updates.request) {
+          SendPushResponse(state.get(), key, req, server);
+        }
       }
       updates.request.clear();
     } else {  // not first iteration
@@ -432,7 +458,11 @@ void BytePSHandler(const ps::KVMeta& req_meta,
       }
       // add a worker information (request.size() is the # workers received)
       updates.request.push_back(req_meta);
-      SendPushResponse(state.get(), key, req_meta, server);
+      if (fused_push_pull) {
+        QueueFusedPullMeta(state.get(), req_meta);
+      } else {
+        SendPushResponse(state.get(), key, req_meta, server);
+      }
       if (sync_mode_ &&
           updates.request.size() == (size_t)GetExpectedWorkers(*state)) {
         if (debug_mode_ && (debug_key_ == key)) {
@@ -447,6 +477,7 @@ void BytePSHandler(const ps::KVMeta& req_meta,
         if (is_engine_blocking_) {
           // TODO: compress
           bps_reducer_->copy(stored.tensor, updates.merged.tensor, len);
+          FlushQueuedPullResponses(state.get(), type, key, server);
         } else {
           BytePSEngineMessage msg = {
               timestamp_.fetch_add(1, std::memory_order_relaxed),

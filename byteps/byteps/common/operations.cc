@@ -731,7 +731,7 @@ std::shared_ptr<std::vector<QueueType>> GetPullQueueList(int device) {
   }
   // Pull in distributed mode
   if (BytePSGlobal::IsDistributed()) {
-    if (BytePSGlobal::IsRootDevice()) {
+    if (BytePSGlobal::IsRootDevice() && !IsFusedPushPullEnabled()) {
       queue_list->push_back(PULL);
     }
   }

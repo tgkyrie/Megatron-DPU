@@ -7,7 +7,7 @@ set -euo pipefail
 #
 # Defaults match the text-only Llama-3.2-3B shape:
 # layers=28, hidden=3072, ffn=8192, heads=24,
-# GQA kv heads=8, vocab=128256, RMSNorm eps=1e-5.
+# GQA kv heads=8, benchmark vocab=9216, RMSNorm eps=1e-5.
 ############################################
 
 export NODE_RANK=${NODE_RANK:-0}
@@ -175,7 +175,7 @@ NUM_QUERY_GROUPS=${NUM_QUERY_GROUPS:-8}
 
 SEQ_LENGTH=${SEQ_LENGTH:-256}
 MAX_POSITION_EMBEDDINGS=${MAX_POSITION_EMBEDDINGS:-131072}
-VOCAB_SIZE=${VOCAB_SIZE:-128256}
+VOCAB_SIZE=${VOCAB_SIZE:-9216}
 NORMALIZATION=${NORMALIZATION:-RMSNorm}
 NORM_EPSILON=${NORM_EPSILON:-1e-5}
 ROTARY_BASE=${ROTARY_BASE:-500000}
