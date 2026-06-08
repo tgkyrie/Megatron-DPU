@@ -180,6 +180,7 @@ KV_CHANNELS=${KV_CHANNELS:-128}
 
 SEQ_LENGTH=${SEQ_LENGTH:-256}
 MAX_POSITION_EMBEDDINGS=${MAX_POSITION_EMBEDDINGS:-2048}
+VOCAB_SIZE=${VOCAB_SIZE:-4096}
 
 DTYPE=${DTYPE:-fp32}
 
@@ -299,7 +300,7 @@ if [[ "$TOKENIZER_ARG" == "MOCK" ]] || [[ "$DATA_ARG" == "MOCK" ]]; then
     DATA_ARGS_LIST+=(
         --mock-data
         --tokenizer-type NullTokenizer
-        --vocab-size 4096
+        --vocab-size "$VOCAB_SIZE"
         --split '99,1,0'
         --no-mmap-bin-files
         --num-workers 1
@@ -309,7 +310,7 @@ else
         --data-path "$DATA_ARG"
         --tokenizer-type HuggingFaceTokenizer
         --tokenizer-model "$TOKENIZER_ARG"
-        --vocab-size 4096
+        --vocab-size "$VOCAB_SIZE"
         --data-cache-path "$DATA_CACHE_PATH"
         --split '99,1,0'
         --no-mmap-bin-files
@@ -347,6 +348,7 @@ CMD=(python "$PRETRAIN_SCRIPT_PATH"
 ############################################
 echo "[net] HCA=${PRIMARY_HCA:-unset} IF=${DMLC_INTERFACE} LOCAL_IP=${LOCAL_DETECTED_IP:-unset} MASTER_ADDR=${MASTER_ADDR} ROOT=${DMLC_PS_ROOT_URI}"
 echo "[dpu] USE_DPU=${USE_DPU}"
+echo "[model] NUM_LAYERS=${NUM_LAYERS} HIDDEN_SIZE=${HIDDEN_SIZE} FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE} NUM_HEADS=${NUM_HEADS} KV_CHANNELS=${KV_CHANNELS} VOCAB_SIZE=${VOCAB_SIZE}"
 echo "[overlap] USE_OVERLAP=${USE_OVERLAP}"
 echo "[run] TRAIN_ITERS=${TRAIN_ITERS} EVAL_INTERVAL=${EVAL_INTERVAL} EVAL_ITERS=${EVAL_ITERS} SEED=${SEED}"
 echo "[numa] NUMA_NODE=${NUMA_NODE} CPU_LIST='${CPU_LIST}' IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST}"

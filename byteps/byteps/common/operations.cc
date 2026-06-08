@@ -34,12 +34,13 @@ namespace common {
 extern "C" {
 
 void byteps_init() {
-  int use_gdr=std::stoi(getenv("DMLC_USE_GDR"));
-  if(use_gdr){
-    byteps_lazy_init_for_gdr();
-  }else{
-    byteps_lazy_init();
-  }
+  const char* use_gdr_env = getenv("DMLC_USE_GDR");
+  int use_gdr = use_gdr_env ? atoi(use_gdr_env) : 0;
+  BPS_CHECK(!use_gdr)
+      << "DMLC_USE_GDR=1 is disabled in this tree: the current GDR path "
+      << "does not implement the bccl-github GDR push-pull queue/server "
+      << "state machine and can produce incorrect training results.";
+  byteps_lazy_init();
   BytePSGlobal::GetOrInitPS();
 }
 

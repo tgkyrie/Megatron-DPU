@@ -12,7 +12,7 @@ set -euo pipefail
 #
 # Defaults match LLaMA-2-7B:
 #   layers=32, hidden=4096, ffn=11008,
-#   heads=32, benchmark vocab=7936, context=6144,
+#   heads=32, benchmark vocab=4096, context=6144,
 #   RMSNorm eps=1e-5, RoPE.
 #
 # For original LLaMA-1-7B style context / RMSNorm epsilon, override:
@@ -179,7 +179,7 @@ KV_CHANNELS=${KV_CHANNELS:-128}
 
 SEQ_LENGTH=${SEQ_LENGTH:-6144}
 MAX_POSITION_EMBEDDINGS=${MAX_POSITION_EMBEDDINGS:-${SEQ_LENGTH}}
-VOCAB_SIZE=${VOCAB_SIZE:-7936}
+VOCAB_SIZE=${VOCAB_SIZE:-4096}
 
 NORMALIZATION=${NORMALIZATION:-RMSNorm}
 NORM_EPSILON=${NORM_EPSILON:-1e-5}

@@ -7,7 +7,7 @@ set -euo pipefail
 #
 # Defaults match Qwen3-4B dense:
 # layers=36, hidden=2560, ffn=9728, heads=32,
-# GQA kv heads=8, benchmark vocab=13184, RMSNorm eps=1e-6.
+# GQA kv heads=8, benchmark vocab=4096, RMSNorm eps=1e-6.
 ############################################
 
 export NODE_RANK=${NODE_RANK:-0}
@@ -200,7 +200,7 @@ NUM_QUERY_GROUPS=${NUM_QUERY_GROUPS:-8}
 
 SEQ_LENGTH=${SEQ_LENGTH:-256}
 MAX_POSITION_EMBEDDINGS=${MAX_POSITION_EMBEDDINGS:-40960}
-VOCAB_SIZE=${VOCAB_SIZE:-13184}
+VOCAB_SIZE=${VOCAB_SIZE:-4096}
 MAKE_VOCAB_SIZE_DIVISIBLE_BY=${MAKE_VOCAB_SIZE_DIVISIBLE_BY:-128}
 NORMALIZATION=${NORMALIZATION:-RMSNorm}
 NORM_EPSILON=${NORM_EPSILON:-1e-6}
