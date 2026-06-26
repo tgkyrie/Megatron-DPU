@@ -4,8 +4,8 @@ set -euo pipefail
 
 SCRIPT_DIR=$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)
 
-export USE_DPU=${USE_DPU:-0}
-export USE_DPU_DP=0
+export USE_DPU=${USE_DPU:-1}
+export USE_DPU_DP=${USE_DPU_DP:-${USE_DPU}}
 export USE_DPU_TP=${USE_DPU_TP:-${USE_DPU}}
 export USE_OVERLAP=${USE_OVERLAP:-0}
 export NUM_NODES=${NUM_NODES:-8}

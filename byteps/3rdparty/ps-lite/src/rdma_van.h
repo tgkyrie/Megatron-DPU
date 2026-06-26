@@ -731,7 +731,8 @@ class RDMAVan : public Van {
   }
 
   void StoreRemoteAndLocalInfo(MessageBuffer* msg_buf, uint64_t remote_addr,
-                               uint32_t rkey, uint32_t idx) {
+                               uint32_t rkey, uint32_t idx,
+                               uint64_t remote_data_addr) {
     std::lock_guard<std::mutex> lk(addr_mu_);
 
     CHECK_NE(msgbuf_cache_.find(msg_buf), msgbuf_cache_.end());
@@ -742,7 +743,7 @@ class RDMAVan : public Van {
     auto is_push = msg.meta.push;
     auto recver = msg.meta.recver;
 
-    auto t = std::make_tuple(remote_addr, rkey, idx, msg_buf);
+    auto t = std::make_tuple(remote_addr, rkey, idx, msg_buf, remote_data_addr);
     if (is_push) {
       push_addr_[key][recver] = t;
     } else {
@@ -986,6 +987,7 @@ class RDMAVan : public Van {
               RendezvousReply* resp =
                   reinterpret_cast<RendezvousReply*>(mr->addr);
               uint64_t remote_addr = resp->addr;
+              uint64_t remote_data_addr = resp->data_addr;
               uint64_t origin_addr = resp->origin_addr;
               uint32_t rkey = resp->rkey;
               uint32_t idx = resp->idx;
@@ -995,7 +997,8 @@ class RDMAVan : public Van {
 
               // Before RDMA write, store the remote info so that
               // subsequent write does not need repeated rendezvous
-              StoreRemoteAndLocalInfo(msg_buf, remote_addr, rkey, idx);
+              StoreRemoteAndLocalInfo(msg_buf, remote_addr, rkey, idx,
+                                      remote_data_addr);
 
               Message* msg = GetFirstMsg(msg_buf);
 

@@ -146,6 +146,7 @@ struct RendezvousStart {
 
 struct RendezvousReply {
   uint64_t addr;
+  uint64_t data_addr;
   uint64_t origin_addr;
   uint32_t rkey;
   uint32_t idx;
@@ -175,8 +176,9 @@ struct RequestContext {
   char hostname[kMaxHostnameLength];
 };
 
-// <remote_addr, rkey, idx, local_addr>
-typedef std::tuple<uint64_t, uint32_t, uint32_t, MessageBuffer *> RemoteTuple;
+// <remote_meta_addr, rkey, idx, local_addr, remote_data_addr>
+typedef std::tuple<uint64_t, uint32_t, uint32_t, MessageBuffer *, uint64_t>
+    RemoteTuple;
 
 // GDR 
 // <remote_addr, rkey, idx, local_addr,data_addr,data_rkey>

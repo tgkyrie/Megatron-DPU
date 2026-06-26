@@ -113,7 +113,7 @@ You can try to increase the number of processing threads on the servers (default
 export BYTEPS_SERVER_ENGINE_THREAD=v
 ```
 
-Or enable scheduling at the server side to prioritize tensors with higher priority:
+Or enable scheduling at the server side to prioritize tensors with higher priority. This is off by default:
 
 ```
 export BYTEPS_SERVER_ENABLE_SCHEDULE=1

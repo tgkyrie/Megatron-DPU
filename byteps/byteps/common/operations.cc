@@ -601,8 +601,8 @@ void InitTensor(BPSContext &context, size_t size, int dtype, void *cpubuff) {
                                 : BytePSGlobal::GetNumWorker();
     for (auto key : key_list) {
       auto &kv = BytePSGlobal::EncodeDefaultKey(key, sizeof(int));
-      auto *raw = reinterpret_cast<char*>(&expected_workers);
-      ps::SArray<char> vals(raw, sizeof(int), false);
+      ps::SArray<char> vals(sizeof(int));
+      std::memcpy(vals.data(), &expected_workers, sizeof(int));
       int cmd = GetCommandType(RequestType::kGroupRegister, BYTEPS_INT32);
       ps->Wait(ps->ZPush(kv.keys, vals, kv.lens, cmd));
     }

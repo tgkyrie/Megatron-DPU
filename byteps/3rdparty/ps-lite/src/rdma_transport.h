@@ -420,9 +420,9 @@ class RDMATransport : public Transport {
     }
 
     // worker only needs a buffer for receving meta
-    char* buffer = allocator_->Alloc(
-        is_server_ ? (align_ceil(req->meta_len, pagesize_) + data_len)
-                   : req->meta_len);
+    const size_t data_offset = align_ceil(req->meta_len, pagesize_);
+    char* buffer =
+        allocator_->Alloc(is_server_ ? (data_offset + data_len) : req->meta_len);
     CHECK(buffer);
     buf_ctx->buffer = buffer;
 
@@ -433,6 +433,8 @@ class RDMATransport : public Transport {
         reinterpret_cast<RendezvousReply*>(reply_ctx->buffer->addr);
 
     resp->addr = reinterpret_cast<uint64_t>(buffer);
+    resp->data_addr =
+        reinterpret_cast<uint64_t>(is_server_ ? (buffer + data_offset) : buffer);
     resp->rkey = allocator_->RemoteKey(buffer);
     resp->origin_addr = req->origin_addr;
     resp->idx = addrpool.StoreAddress(buf_ctx);
@@ -481,7 +483,7 @@ class RDMATransport : public Transport {
     auto meta_raddr = std::get<0>(remote_tuple);
     auto meta_rkey = std::get<1>(remote_tuple);
     auto idx = std::get<2>(remote_tuple);
-    auto data_raddr = meta_raddr + align_ceil(msg_buf->inline_len, pagesize_);
+    auto data_raddr = std::get<4>(remote_tuple);
     auto data_rkey = meta_rkey;
     // #endif
     // auto raddr = std::get<0>(remote_tuple);
