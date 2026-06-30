@@ -12,9 +12,7 @@ import time
 
 import torch
 import byteps.torch as bps
-from byteps.torch.ops import push_pull_group_sync_inplace as byteps_push_pull_group
-from byteps.torch.ops import get_pushpull_speed
-from byteps.torch.ops_gdr import allreduce
+from byteps.torch.ops import push_pull_inplace
 
 
 def parse_args():
@@ -30,16 +28,6 @@ def parse_args():
     p.add_argument("--cpu-tensor",default=False,action="store_true",
                    help="cpu tensor")
     return p.parse_args()
-
-def push_pull_grad_group_sync(tensor):
-    name="test"
-
-    handle, grad_count = byteps_push_pull_group(tensor, average=True,
-            name="Gradient."+name)
-    return handle, grad_count
-
-def do_allreduce(tensor):
-    allreduce(tensor,False,True,"test")
 
 def main():
     args = parse_args()
@@ -65,12 +53,10 @@ def main():
     else:
         tensor = torch.ones(elems, device="cuda", dtype=dtype)
 
-    def do_push_pull():
-        # bps.push_pull(tensor, average=True, name="bench")
-        handle,gc=push_pull_grad_group_sync(tensor)
-        # if not args.cpu_tensor:
-            # torch.cuda.synchronize()
-        return handle
+    def do_push_pull(iter_idx):
+        push_pull_inplace(tensor, average=True, name=f"bench-{iter_idx}")
+        if not args.cpu_tensor:
+            torch.cuda.synchronize()
     if rank == 0:
         print(
             f"[byteps-pushpull] "
@@ -80,10 +66,8 @@ def main():
     # ---------------------------
     # warmup
     # ---------------------------
-    for _ in range(args.warmup):
-        # handle=do_push_pull()
-        # bps.synchronize(handle=handle)
-        do_allreduce(tensor)
+    for i in range(args.warmup):
+        do_push_pull(f"warmup-{i}")
 
     # ---------------------------
     # benchmark
@@ -91,9 +75,7 @@ def main():
     for i in range(args.iters):
         time.sleep(0.5)
         t0 = time.time()
-        # handle=do_push_pull()
-        # bps.synchronize(handle=handle)
-        do_allreduce(tensor)
+        do_push_pull(i)
         dur_ms = (time.time() - t0) * 1000.0
 
         if True:
