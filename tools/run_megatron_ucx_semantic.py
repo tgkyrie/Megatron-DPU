@@ -7,6 +7,10 @@ passes topology/runtime values to workers, plus explicit NCCL-disable flags for
 baseline cases. Scheduler/server roles do not run those training scripts, so
 their BytePS/UCX environment is set here and kept aligned with the script
 defaults.
+
+For legacy ablation commands, BYTEPS_RDMA_SEPARATE_CONTROL_DATA can be used as
+a backend selector at the runner layer: 1 selects UCX and 0 selects ibverbs RDMA.
+The variable is not forwarded to ps-lite unless BYTEPS_PASS_CDS_TO_PSLITE=1.
 """
 import math
 import os
@@ -34,20 +38,66 @@ WORKER_IMAGE = os.environ.get("WORKER_IMAGE", "192.168.1.10:5000/megatron-dpu:la
 DPU_IMAGE = os.environ.get("DPU_IMAGE", "192.168.1.10:5000/byteps-server:latest")
 
 SCHEDULER = "gpu01"
-HOST_SERVERS = ["R750-1", "R750-2", "R750-3", "R750-4", "server12", "server13", "server14", "server15"]
-WORKERS = ["gpu01", "gpu02", "gpu03", "gpu04", "asus01", "asus02", "asus03", "asus04"]
-WORKER_IPS = ["192.168.1.10", "192.168.1.11", "192.168.1.12", "192.168.1.13",
-              "192.168.1.20", "192.168.1.21", "192.168.1.22", "192.168.1.23"]
-HOST_SERVER_IPS = ["192.168.1.40", "192.168.1.41", "192.168.1.42", "192.168.1.43",
-                   "192.168.1.30", "192.168.1.31", "192.168.1.32", "192.168.1.33"]
-DPU_SERVER_HOSTS = HOST_SERVERS
-DPU_SERVER_IPS = ["192.168.1.97", "192.168.1.96", "192.168.1.98", "192.168.1.99",
-                  "192.168.1.95", "192.168.1.93", "192.168.1.92", "192.168.1.94"]
+WORKERS_DEFAULT = ["gpu01", "gpu02", "gpu03", "gpu04", "asus01", "asus02", "asus03", "asus04"]
+WORKER_IPS_DEFAULT = ["192.168.1.10", "192.168.1.11", "192.168.1.12", "192.168.1.13",
+                      "192.168.1.20", "192.168.1.21", "192.168.1.22", "192.168.1.23"]
+HOST_SERVERS_DEFAULT = ["R750-1", "R750-2", "R750-3", "R750-4", "server12", "server13", "server14", "server15"]
+HOST_SERVER_IPS_DEFAULT = ["192.168.1.40", "192.168.1.41", "192.168.1.42", "192.168.1.43",
+                           "192.168.1.30", "192.168.1.31", "192.168.1.32", "192.168.1.33"]
+
+
+def env_list(name, default):
+    value = os.environ.get(name, "")
+    if not value.strip():
+        return list(default)
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
+WORKERS = env_list("WORKERS_OVERRIDE", WORKERS_DEFAULT)
+WORKER_IPS = env_list("WORKER_IPS_OVERRIDE", WORKER_IPS_DEFAULT)
+if len(WORKERS) != len(WORKER_IPS):
+    raise SystemExit("WORKERS_OVERRIDE and WORKER_IPS_OVERRIDE must have the same length")
+if not WORKERS:
+    raise SystemExit("WORKERS_OVERRIDE must not be empty")
+METRIC_WORKER = os.environ.get("METRIC_WORKER_OVERRIDE", WORKERS[-1])
+if METRIC_WORKER not in WORKERS:
+    raise SystemExit("METRIC_WORKER_OVERRIDE must be one of WORKERS")
+METRIC_RANK = WORKERS.index(METRIC_WORKER)
+HOST_SERVERS = env_list("HOST_SERVERS_OVERRIDE", HOST_SERVERS_DEFAULT)
+HOST_SERVER_IPS = env_list("HOST_SERVER_IPS_OVERRIDE", HOST_SERVER_IPS_DEFAULT)
+if len(HOST_SERVERS) != len(HOST_SERVER_IPS):
+    raise SystemExit("HOST_SERVERS_OVERRIDE and HOST_SERVER_IPS_OVERRIDE must have the same length")
+DPU_SERVER_HOSTS = env_list("DPU_SERVER_HOSTS_OVERRIDE", HOST_SERVERS_DEFAULT)
+DPU_SERVER_IPS = env_list(
+    "DPU_SERVER_IPS_OVERRIDE",
+    ["192.168.1.97", "192.168.1.96", "192.168.1.98", "192.168.1.99",
+     "192.168.1.95", "192.168.1.93", "192.168.1.92", "192.168.1.94"],
+)
+if len(DPU_SERVER_HOSTS) != len(DPU_SERVER_IPS):
+    raise SystemExit("DPU_SERVER_HOSTS_OVERRIDE and DPU_SERVER_IPS_OVERRIDE must have the same length")
 
 DPU_PASS = os.environ.get("DPU_PASS", "ubuntu")
 FUSED_PUSH_PULL = os.environ.get("BYTEPS_ENABLE_FUSED_PUSH_PULL", "1")
 SERVER_ENABLE_SCHEDULE = os.environ.get("BYTEPS_SERVER_ENABLE_SCHEDULE", "0")
-NETWORK_MODE = os.environ.get("NETWORK_MODE", "ucx").lower()
+CDS_BACKEND_SWITCH_ENV = "BYTEPS_RDMA_SEPARATE_CONTROL_DATA"
+USE_CDS_AS_BACKEND_SWITCH = os.environ.get("BYTEPS_USE_CDS_AS_BACKEND_SWITCH", "1") != "0"
+PASS_CDS_TO_PSLITE = os.environ.get("BYTEPS_PASS_CDS_TO_PSLITE", "0") == "1"
+CDS_SWITCH_VALUE = os.environ.get(CDS_BACKEND_SWITCH_ENV, "").strip()
+NETWORK_MODE_RAW = os.environ.get("NETWORK_MODE", "").strip().lower()
+NETWORK_MODE_SOURCE = "default"
+if NETWORK_MODE_RAW:
+    NETWORK_MODE = NETWORK_MODE_RAW
+    NETWORK_MODE_SOURCE = "NETWORK_MODE"
+elif USE_CDS_AS_BACKEND_SWITCH and CDS_SWITCH_VALUE in ("0", "1"):
+    # Compatibility ablation mapping: "separated" selects the fast UCX path;
+    # "fused" selects the ibverbs RDMA path. The legacy flag is not forwarded
+    # to ps-lite unless BYTEPS_PASS_CDS_TO_PSLITE=1 is set.
+    NETWORK_MODE = "ucx" if CDS_SWITCH_VALUE == "1" else "rdma"
+    NETWORK_MODE_SOURCE = CDS_BACKEND_SWITCH_ENV
+elif USE_CDS_AS_BACKEND_SWITCH and CDS_SWITCH_VALUE:
+    raise SystemExit(f"{CDS_BACKEND_SWITCH_ENV} must be 0 or 1 when used as backend switch")
+else:
+    NETWORK_MODE = "ucx"
 if NETWORK_MODE not in ("rdma", "ucx"):
     raise SystemExit("NETWORK_MODE must be rdma or ucx")
 TRAIN_ITERS = int(os.environ.get("TRAIN_ITERS", "10"))
@@ -70,6 +120,18 @@ UCX_MAX_RNDV_RAILS = os.environ.get("UCX_MAX_RNDV_RAILS_OVERRIDE", "2")
 CUDA_VISIBLE_DEVICES_OVERRIDE = os.environ.get("CUDA_VISIBLE_DEVICES_OVERRIDE", "")
 UCX_RAIL_VARIANTS = [v.strip() for v in os.environ.get("UCX_RAIL_VARIANTS", "default,single,dual").split(",") if v.strip()]
 DMLC_NUM_PORTS = os.environ.get("DMLC_NUM_PORTS", "").strip()
+
+if os.environ.get("DMLC_NUM_SERVER_OVERRIDE", "").strip():
+    DMLC_NUM_SERVER = os.environ["DMLC_NUM_SERVER_OVERRIDE"].strip()
+elif RUN_CASES == ["hostservers"]:
+    DMLC_NUM_SERVER = str(len(HOST_SERVERS))
+elif RUN_CASES == ["dpuservers"]:
+    DMLC_NUM_SERVER = str(len(DPU_SERVER_HOSTS))
+else:
+    if len(HOST_SERVERS) != len(DPU_SERVER_HOSTS):
+        raise SystemExit("Set DMLC_NUM_SERVER_OVERRIDE when host and DPU server counts differ")
+    DMLC_NUM_SERVER = str(len(HOST_SERVERS))
+DMLC_NUM_WORKER = os.environ.get("DMLC_NUM_WORKER_OVERRIDE", str(len(WORKERS))).strip()
 
 WORKLOAD = os.environ.get("WORKLOAD", "dp_qwen3b")
 WORKLOADS = {
@@ -236,11 +298,27 @@ WORKER_EXTRA_EXPORT_NAMES = [
     for name in os.environ.get("WORKER_EXTRA_EXPORT_NAMES", "").split(",")
     if name.strip()
 ]
-WORKER_EXTRA_EXPORTS = "\n".join(
-    f"export {name}={shlex.quote(os.environ[name])}"
-    for name in WORKER_EXTRA_EXPORT_NAMES
-    if name in os.environ
-)
+BYTEPS_EXTRA_EXPORT_NAMES = [
+    name.strip()
+    for name in os.environ.get("BYTEPS_EXTRA_EXPORT_NAMES", "").split(",")
+    if name.strip()
+]
+FILTERED_EXTRA_EXPORT_NAMES = set()
+
+
+def extra_exports(names):
+    exports = []
+    for name in names:
+        if name == CDS_BACKEND_SWITCH_ENV and not PASS_CDS_TO_PSLITE:
+            FILTERED_EXTRA_EXPORT_NAMES.add(name)
+            continue
+        if name in os.environ:
+            exports.append(f"export {name}={shlex.quote(os.environ[name])}")
+    return "\n".join(exports)
+
+
+WORKER_EXTRA_EXPORTS = extra_exports(WORKER_EXTRA_EXPORT_NAMES)
+BYTEPS_EXTRA_EXPORTS = extra_exports(BYTEPS_EXTRA_EXPORT_NAMES)
 QWEN_SCRIPT_NAMES = [
     "train_qwen_3b.sh",
     "train_qwen_3b_tp_byteps.sh",
@@ -319,8 +397,8 @@ def common_env(port, include_byteps=True, worker_use_dpu=True):
     base = f"""
 export DMLC_PS_ROOT_URI=192.168.1.10
 export DMLC_PS_ROOT_PORT={port}
-export DMLC_NUM_WORKER=8
-export DMLC_NUM_SERVER=8
+export DMLC_NUM_WORKER={DMLC_NUM_WORKER}
+export DMLC_NUM_SERVER={DMLC_NUM_SERVER}
 {num_ports_export.rstrip()}
 unset WORKER_ID
 """
@@ -348,6 +426,7 @@ export BYTEPS_PARTITION_BYTES={BYTEPS_PARTITION_BYTES}
 export BYTEPS_ADDRESS_POOL_SIZE={BYTEPS_ADDRESS_POOL_SIZE}
 export BYTEPS_RDMA_RX_DEPTH={BYTEPS_RDMA_RX_DEPTH}
 export BYTEPS_RDMA_START_DEPTH={BYTEPS_RDMA_START_DEPTH}
+{BYTEPS_EXTRA_EXPORTS}
 """
     return base + f"""
 export DMLC_ENABLE_UCX=0
@@ -360,6 +439,7 @@ export BYTEPS_PARTITION_BYTES={BYTEPS_PARTITION_BYTES}
 export BYTEPS_ADDRESS_POOL_SIZE={BYTEPS_ADDRESS_POOL_SIZE}
 export BYTEPS_RDMA_RX_DEPTH={BYTEPS_RDMA_RX_DEPTH}
 export BYTEPS_RDMA_START_DEPTH={BYTEPS_RDMA_START_DEPTH}
+{BYTEPS_EXTRA_EXPORTS}
 """
 
 
@@ -616,10 +696,11 @@ def collect_case(run, case, use_dpu_servers):
 
     for key, text in logs.items():
         write_text(LOGDIR / f"{run}-{key}.log", text)
-    rank7 = logs["asus04-worker"]
-    rows = parse_iterations(rank7)
-    eval_losses = parse_eval_losses(rank7)
-    iter_path = LOGDIR / f"{run}-rank7-iterations.tsv"
+    metric_key = f"{METRIC_WORKER}-worker"
+    metric_log = logs.get(metric_key, "")
+    rows = parse_iterations(metric_log)
+    eval_losses = parse_eval_losses(metric_log)
+    iter_path = LOGDIR / f"{run}-rank{METRIC_RANK}-iterations.tsv"
     iter_lines = ["iter\tms\tloss"]
     for r in rows:
         ms = "" if math.isnan(r["ms"]) else f"{r['ms']:.6f}"
@@ -638,7 +719,7 @@ def collect_case(run, case, use_dpu_servers):
         "rows": rows,
         "eval_losses": eval_losses,
         "statuses": statuses,
-        "rank7_log": str(LOGDIR / f"{run}-asus04-worker.log"),
+        "metric_worker_log": str(LOGDIR / f"{run}-{METRIC_WORKER}-worker.log"),
         "iter_file": str(iter_path),
     }
 
@@ -654,16 +735,16 @@ def monitor_run(run, case, eval_phase=False):
     last_eval = {}
     while time.time() < deadline:
         statuses = [get_host_status(h, run, "worker") for h in WORKERS]
-        rank7_log = cat_host_file("asus04", f"/tmp/{run}-worker.log")
-        rows = parse_iterations(rank7_log)
+        metric_log = cat_host_file(METRIC_WORKER, f"/tmp/{run}-worker.log")
+        rows = parse_iterations(metric_log)
         count = len(rows)
-        eval_losses = parse_eval_losses(rank7_log)
+        eval_losses = parse_eval_losses(metric_log)
         changed = count != last_count or eval_losses != last_eval
         if changed:
             if eval_phase:
-                print(f"[{case}:eval] iteration lines={count} eval={eval_losses} statuses={statuses}", flush=True)
+                print(f"[{case}:eval] rank{METRIC_RANK} iteration lines={count} eval={eval_losses} statuses={statuses}", flush=True)
             else:
-                print(f"[{case}] rank7 iteration lines={count} statuses={statuses}", flush=True)
+                print(f"[{case}] rank{METRIC_RANK} iteration lines={count} statuses={statuses}", flush=True)
             last_count = count
             last_eval = eval_losses
         if all(s.startswith("rc=") for s in statuses):
@@ -734,8 +815,8 @@ def failed_result(case, run, attempt, ps_port, master_port, exc, rail_variant="d
         "rows": [],
         "eval_losses": {},
         "statuses": {"exception": repr(exc)},
-        "rank7_log": str(LOGDIR / f"{run}-asus04-worker.log"),
-        "iter_file": str(LOGDIR / f"{run}-rank7-iterations.tsv"),
+        "metric_worker_log": str(LOGDIR / f"{run}-{METRIC_WORKER}-worker.log"),
+        "iter_file": str(LOGDIR / f"{run}-rank{METRIC_RANK}-iterations.tsv"),
         "ps_port": ps_port,
         "master_port": master_port,
         "attempt": attempt,
@@ -830,14 +911,14 @@ def main():
         f"{i}\t{a:.12g}\t{b:.12g}\t{d:.12g}" for i, a, b, d in diffs
     ) + "\n")
 
-    lines = ["case\tattempt\trail_variant\trun\tstatus\tps_port\tmaster_port\tmean_ms_iter2_20\tstd_ms\tn\ttrain_valid_loss\ttrain_test_loss\trank7_log\titer_file"]
+    lines = ["case\tattempt\trail_variant\trun\tstatus\tps_port\tmaster_port\tmean_ms_iter2_20\tstd_ms\tn\ttrain_valid_loss\ttrain_test_loss\tmetric_worker_log\titer_file"]
     for r in results:
         mean = "NA" if math.isnan(r["mean"]) else f"{r['mean']:.3f}"
         std = "NA" if math.isnan(r["std"]) else f"{r['std']:.3f}"
         train_valid = r["eval_losses"].get("validation", math.nan)
         train_test = r["eval_losses"].get("test", math.nan)
         fmt = lambda v: "NA" if math.isnan(v) else f"{v:.12g}"
-        lines.append(f"{r['case']}\t{r.get('attempt', 1)}\t{r.get('rail_variant', '')}\t{r.get('run', '')}\t{r['status']}\t{r['ps_port']}\t{r['master_port']}\t{mean}\t{std}\t{r['n']}\t{fmt(train_valid)}\t{fmt(train_test)}\t{r['rank7_log']}\t{r['iter_file']}")
+        lines.append(f"{r['case']}\t{r.get('attempt', 1)}\t{r.get('rail_variant', '')}\t{r.get('run', '')}\t{r['status']}\t{r['ps_port']}\t{r['master_port']}\t{mean}\t{std}\t{r['n']}\t{fmt(train_valid)}\t{fmt(train_test)}\t{r['metric_worker_log']}\t{r['iter_file']}")
     write_text(OUT / "summary.tsv", "\n".join(lines) + "\n")
 
     status_lines = []
@@ -863,13 +944,17 @@ def main():
         f"- runner extra worker exports: `{WORKER_EXTRA_EXPORTS.replace(chr(10), '; ') or 'none'}`",
         f"- qwen script source dir: `{QWEN_SCRIPT_SOURCE_DIR or str(ROOT / 'Megatron-LM' / 'examples' / 'qwen')}`",
         f"- model overrides: `{MODEL_EXPORTS.replace(chr(10), '; ')}`",
-        "- worker env policy: BytePS default attempts do not export `USE_DPU*`, `DMLC_ENABLE_UCX`, UCX rail variables, or BytePS tuning variables to workers; worker scripts use their defaults.",
+        "- worker env policy: BytePS default attempts export only explicit network/BytePS knobs requested by the runner; worker scripts otherwise use their defaults.",
         f"- UCX rail retry variants: `{','.join(UCX_RAIL_VARIANTS)}`; only non-default retries export `UCX_RAIL_MODE` to workers.",
         f"- DMLC_NUM_PORTS: `{DMLC_NUM_PORTS or 'unset'}`",
         "- worker env exceptions: runner exports topology/runtime values (`DMLC_*` root/port/count, `DMLC_NODE_HOST`, `MASTER_ADDR`, `MASTER_PORT`, `NODE_RANK`); NCCL case also exports `USE_DPU*=0` to select baseline.",
         "- worker CUDA policy: not exported by runner unless `CUDA_VISIBLE_DEVICES_OVERRIDE` is set; scripts default to `CUDA_VISIBLE_DEVICES=1`",
-        "- topology: scheduler gpu01, workers gpu01,gpu02,gpu03,gpu04,asus01,asus02,asus03,asus04",
+        f"- topology: scheduler gpu01, workers {','.join(WORKERS)}",
         f"- network mode: `{NETWORK_MODE}`",
+        f"- network mode source: `{NETWORK_MODE_SOURCE}`",
+        f"- CDS backend switch: `{CDS_BACKEND_SWITCH_ENV}=1 -> ucx, 0 -> rdma` ({'enabled' if USE_CDS_AS_BACKEND_SWITCH else 'disabled'}; value `{CDS_SWITCH_VALUE or 'unset'}`)",
+        f"- {CDS_BACKEND_SWITCH_ENV} ps-lite pass-through: `{'enabled' if PASS_CDS_TO_PSLITE else 'disabled'}`",
+        f"- filtered extra exports: `{','.join(sorted(FILTERED_EXTRA_EXPORT_NAMES)) or 'none'}`",
         f"- scheduler/server BytePS env: fused push/pull={FUSED_PUSH_PULL}, partition {BYTEPS_PARTITION_BYTES}, address pool {BYTEPS_ADDRESS_POOL_SIZE}, rx depth {BYTEPS_RDMA_RX_DEPTH}, start depth {BYTEPS_RDMA_START_DEPTH}",
         f"- BYTEPS_SERVER_ENABLE_SCHEDULE: `{SERVER_ENABLE_SCHEDULE or 'runner-default-dpu-0'}`",
         f"- max retries per case: `{MAX_RETRIES}`",

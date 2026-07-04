@@ -50,7 +50,7 @@ struct Endpoint {
 
   bool inited = false;
 
-  Endpoint(bool data_plane = false)
+  Endpoint(bool data_plane = false, bool use_data_rx_depth = false)
       : status(IDLE),
         node_id(Node::kEmpty),
         cm_id(nullptr),
@@ -73,7 +73,7 @@ struct Endpoint {
     }
     kStartDepth = byteps_start_depth ? atoi(byteps_start_depth) : kStartDepth;
     int default_rx_depth = byteps_rx_depth ? atoi(byteps_rx_depth) : kRxDepth;
-    if (!isDataPlane) {
+    if (!isDataPlane && !use_data_rx_depth) {
       kRxDepth = byteps_ctrl_rx_depth ? atoi(byteps_ctrl_rx_depth)
                                       : std::min(default_rx_depth, 128);
     } else {

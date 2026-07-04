@@ -76,6 +76,13 @@ class RDMAVan : public Van {
     enable_log_ = val ? atoi(val) : false;
     if (enable_log_) LOG(INFO) << "Enable RDMA logging.";
 
+    val = Environment::Get()->find("BYTEPS_RDMA_SEPARATE_CONTROL_DATA");
+    separate_control_data_ = val ? (atoi(val) != 0) : true;
+    if (!separate_control_data_) {
+      LOG(INFO) << "RDMA control/data separation has been disabled; "
+                << "push/pull data will use the control endpoint.";
+    }
+
     val = Environment::Get()->find("BYTEPS_RDMA_MAX_CONCURR_WR");
     if (val) {
       // should make sure: kMaxConcurrentWorkRequest >= kStartDepth +
@@ -233,7 +240,8 @@ class RDMAVan : public Van {
       }
 
       Endpoint* endpoint;
-      whichEndpoints[node.id] = std::make_unique<Endpoint>(dataPlane);
+      whichEndpoints[node.id] =
+          std::make_unique<Endpoint>(dataPlane, !separate_control_data_);
       endpoint = whichEndpoints[node.id].get();
 
       endpoints_mu_.unlock();
@@ -317,7 +325,8 @@ class RDMAVan : public Van {
     // Only create data plane connections between workers and servers
     // Scheduler should only use control plane connections
     // Servers/workers should not create data plane connections to scheduler
-    if (my_node_.role == Node::WORKER && node.role == Node::SERVER) {
+    if (separate_control_data_ && my_node_.role == Node::WORKER &&
+        node.role == Node::SERVER) {
       Connect2Node(node, true);
     }
   }
@@ -454,7 +463,7 @@ class RDMAVan : public Van {
       endpoint = endpoint_it->second.get();
     }
     Endpoint* dataEndpoint = nullptr;
-    if (is_pushpull) {
+    if (is_pushpull && separate_control_data_) {
       auto data_it = data_endpoints_.find(remote_id);
       if (data_it != data_endpoints_.end()) {
         dataEndpoint = data_it->second.get();
@@ -468,10 +477,10 @@ class RDMAVan : public Van {
     CHECK(endpoint != nullptr)
         << "Control endpoint not ready for remote_id=" << remote_id
         << ", local_id=" << my_node_.id;
-    if (is_pushpull && dataEndpoint == nullptr) {
+    if (is_pushpull && separate_control_data_ && dataEndpoint == nullptr) {
       dataEndpoint = FindIncomingEndpoint(remote_id, true);
     }
-    CHECK(!is_pushpull || dataEndpoint != nullptr)
+    CHECK(!is_pushpull || !separate_control_data_ || dataEndpoint != nullptr)
         << "Data endpoint not ready for remote_id=" << remote_id
         << ", local_id=" << my_node_.id;
 
@@ -490,7 +499,10 @@ class RDMAVan : public Van {
     auto trans = CHECK_NOTNULL(endpoint->GetTransport());
     std::shared_ptr<Transport> dataTrans;
     if (is_pushpull) {
-      dataTrans = CHECK_NOTNULL(dataEndpoint->GetTransport());
+      dataTrans = trans;
+      if (separate_control_data_) {
+        dataTrans = CHECK_NOTNULL(dataEndpoint->GetTransport());
+      }
     }
 
     // start rendezvous if no remote info
@@ -1136,8 +1148,8 @@ class RDMAVan : public Van {
     std::pair<std::unordered_set<std::unique_ptr<Endpoint>>::iterator, bool> r;
     {
       std::lock_guard<std::mutex> incoming_lk(incoming_mu_);
-      r = incoming_.emplace(
-          std::make_unique<Endpoint>(remote_ctx->isDataPlane));
+      r = incoming_.emplace(std::make_unique<Endpoint>(
+          remote_ctx->isDataPlane, !separate_control_data_));
     }
     Endpoint* endpoint = r.first->get();
     endpoint->SetNodeID(remote_ctx->node);
@@ -1319,6 +1331,7 @@ class RDMAVan : public Van {
 
   // logging
   bool enable_log_;
+  bool separate_control_data_ = true;
   std::mutex log_mu_;
 
   int kMaxConcurrentWorkRequest = 4224;  // 128 + 2048 * 2
