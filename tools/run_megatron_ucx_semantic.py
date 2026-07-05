@@ -5,12 +5,12 @@ Worker-side training parameters should come from the
 Megatron-LM/examples/qwen/*.sh defaults whenever possible. This runner only
 passes topology/runtime values to workers, plus explicit NCCL-disable flags for
 baseline cases. Scheduler/server roles do not run those training scripts, so
-their BytePS/UCX environment is set here and kept aligned with the script
+their MegaScalePS/UCX environment is set here and kept aligned with the script
 defaults.
 
-For legacy ablation commands, BYTEPS_RDMA_SEPARATE_CONTROL_DATA can be used as
+For legacy ablation commands, MEGASCALE_PS_RDMA_SEPARATE_CONTROL_DATA can be used as
 a backend selector at the runner layer: 1 selects UCX and 0 selects ibverbs RDMA.
-The variable is not forwarded to ps-lite unless BYTEPS_PASS_CDS_TO_PSLITE=1.
+The variable is not forwarded to ps-lite unless MEGASCALE_PS_PASS_CDS_TO_PSLITE=1.
 """
 import math
 import os
@@ -33,9 +33,9 @@ LOGDIR = OUT / "logs"
 OUT.mkdir(parents=True, exist_ok=True)
 LOGDIR.mkdir(parents=True, exist_ok=True)
 
-X86_IMAGE = os.environ.get("X86_IMAGE", "192.168.1.10:5000/byteps:latest")
+X86_IMAGE = os.environ.get("X86_IMAGE", "192.168.1.10:5000/megascale_ps:latest")
 WORKER_IMAGE = os.environ.get("WORKER_IMAGE", "192.168.1.10:5000/megatron-dpu:latest")
-DPU_IMAGE = os.environ.get("DPU_IMAGE", "192.168.1.10:5000/byteps-server:latest")
+DPU_IMAGE = os.environ.get("DPU_IMAGE", "192.168.1.10:5000/megascale_ps-server:latest")
 
 SCHEDULER = "gpu01"
 WORKERS_DEFAULT = ["gpu01", "gpu02", "gpu03", "gpu04", "asus01", "asus02", "asus03", "asus04"]
@@ -77,11 +77,11 @@ if len(DPU_SERVER_HOSTS) != len(DPU_SERVER_IPS):
     raise SystemExit("DPU_SERVER_HOSTS_OVERRIDE and DPU_SERVER_IPS_OVERRIDE must have the same length")
 
 DPU_PASS = os.environ.get("DPU_PASS", "ubuntu")
-FUSED_PUSH_PULL = os.environ.get("BYTEPS_ENABLE_FUSED_PUSH_PULL", "1")
-SERVER_ENABLE_SCHEDULE = os.environ.get("BYTEPS_SERVER_ENABLE_SCHEDULE", "0")
-CDS_BACKEND_SWITCH_ENV = "BYTEPS_RDMA_SEPARATE_CONTROL_DATA"
-USE_CDS_AS_BACKEND_SWITCH = os.environ.get("BYTEPS_USE_CDS_AS_BACKEND_SWITCH", "1") != "0"
-PASS_CDS_TO_PSLITE = os.environ.get("BYTEPS_PASS_CDS_TO_PSLITE", "0") == "1"
+FUSED_PUSH_PULL = os.environ.get("MEGASCALE_PS_ENABLE_FUSED_PUSH_PULL", "1")
+SERVER_ENABLE_SCHEDULE = os.environ.get("MEGASCALE_PS_SERVER_ENABLE_SCHEDULE", "0")
+CDS_BACKEND_SWITCH_ENV = "MEGASCALE_PS_RDMA_SEPARATE_CONTROL_DATA"
+USE_CDS_AS_BACKEND_SWITCH = os.environ.get("MEGASCALE_PS_USE_CDS_AS_BACKEND_SWITCH", "1") != "0"
+PASS_CDS_TO_PSLITE = os.environ.get("MEGASCALE_PS_PASS_CDS_TO_PSLITE", "0") == "1"
 CDS_SWITCH_VALUE = os.environ.get(CDS_BACKEND_SWITCH_ENV, "").strip()
 NETWORK_MODE_RAW = os.environ.get("NETWORK_MODE", "").strip().lower()
 NETWORK_MODE_SOURCE = "default"
@@ -91,7 +91,7 @@ if NETWORK_MODE_RAW:
 elif USE_CDS_AS_BACKEND_SWITCH and CDS_SWITCH_VALUE in ("0", "1"):
     # Compatibility ablation mapping: "separated" selects the fast UCX path;
     # "fused" selects the ibverbs RDMA path. The legacy flag is not forwarded
-    # to ps-lite unless BYTEPS_PASS_CDS_TO_PSLITE=1 is set.
+    # to ps-lite unless MEGASCALE_PS_PASS_CDS_TO_PSLITE=1 is set.
     NETWORK_MODE = "ucx" if CDS_SWITCH_VALUE == "1" else "rdma"
     NETWORK_MODE_SOURCE = CDS_BACKEND_SWITCH_ENV
 elif USE_CDS_AS_BACKEND_SWITCH and CDS_SWITCH_VALUE:
@@ -140,31 +140,31 @@ WORKLOADS = {
         "parallel": "DP",
         "model": "qwen_3b",
         "tp_size": "1",
-        "byteps_flags": {"USE_DPU": "1"},
+        "megascale_ps_flags": {"USE_DPU": "1"},
         "nccl_flags": {"USE_DPU": "0"},
     },
     "tp_llama2_7b": {
-        "script": "examples/qwen/train_llama_7b_tp_byteps.sh",
+        "script": "examples/qwen/train_llama_7b_tp_megascale_ps.sh",
         "parallel": "TP",
         "model": "llama2_7b",
         "tp_size": "8",
-        "byteps_flags": {"USE_DPU": "1"},
+        "megascale_ps_flags": {"USE_DPU": "1"},
         "nccl_flags": {"USE_DPU": "0"},
     },
     "tp_qwen3_4b": {
-        "script": "examples/qwen/train_qwen3_4b_tp_byteps.sh",
+        "script": "examples/qwen/train_qwen3_4b_tp_megascale_ps.sh",
         "parallel": "TP",
         "model": "qwen3_4b",
         "tp_size": "8",
-        "byteps_flags": {},
+        "megascale_ps_flags": {},
         "nccl_flags": {"USE_DPU": "0", "USE_DPU_DP": "0", "USE_DPU_TP": "0"},
     },
     "dptp_qwen3_4b": {
-        "script": "examples/qwen/train_qwen3_4b_tp_dp_byteps.sh",
+        "script": "examples/qwen/train_qwen3_4b_tp_dp_megascale_ps.sh",
         "parallel": "DPTP",
         "model": "qwen3_4b",
         "tp_size": "2",
-        "byteps_flags": {"USE_DPU_DP": "1", "USE_DPU_TP": "1"},
+        "megascale_ps_flags": {"USE_DPU_DP": "1", "USE_DPU_TP": "1"},
         "nccl_flags": {"USE_DPU_DP": "0", "USE_DPU_TP": "0"},
     },
 }
@@ -172,7 +172,7 @@ if WORKLOAD not in WORKLOADS:
     raise SystemExit(f"unknown WORKLOAD={WORKLOAD}; choose one of {','.join(WORKLOADS)}")
 WORKLOAD_CFG = WORKLOADS[WORKLOAD]
 
-BYTEPS_DEFAULTS = {
+MEGASCALE_PS_DEFAULTS = {
     "rdma": {
         "dp_qwen3b": {
             "partition": "4194304",
@@ -226,11 +226,11 @@ BYTEPS_DEFAULTS = {
         },
     },
 }
-BYTEPS_DEFAULT = BYTEPS_DEFAULTS[NETWORK_MODE][WORKLOAD]
-BYTEPS_PARTITION_BYTES = os.environ.get("BYTEPS_PARTITION_BYTES_DEFAULT", BYTEPS_DEFAULT["partition"])
-BYTEPS_ADDRESS_POOL_SIZE = os.environ.get("BYTEPS_ADDRESS_POOL_SIZE_DEFAULT", BYTEPS_DEFAULT["address_pool"])
-BYTEPS_RDMA_RX_DEPTH = os.environ.get("BYTEPS_RDMA_RX_DEPTH_DEFAULT", BYTEPS_DEFAULT["rx_depth"])
-BYTEPS_RDMA_START_DEPTH = os.environ.get("BYTEPS_RDMA_START_DEPTH_DEFAULT", BYTEPS_DEFAULT["start_depth"])
+MEGASCALE_PS_DEFAULT = MEGASCALE_PS_DEFAULTS[NETWORK_MODE][WORKLOAD]
+MEGASCALE_PS_PARTITION_BYTES = os.environ.get("MEGASCALE_PS_PARTITION_BYTES_DEFAULT", MEGASCALE_PS_DEFAULT["partition"])
+MEGASCALE_PS_ADDRESS_POOL_SIZE = os.environ.get("MEGASCALE_PS_ADDRESS_POOL_SIZE_DEFAULT", MEGASCALE_PS_DEFAULT["address_pool"])
+MEGASCALE_PS_RDMA_RX_DEPTH = os.environ.get("MEGASCALE_PS_RDMA_RX_DEPTH_DEFAULT", MEGASCALE_PS_DEFAULT["rx_depth"])
+MEGASCALE_PS_RDMA_START_DEPTH = os.environ.get("MEGASCALE_PS_RDMA_START_DEPTH_DEFAULT", MEGASCALE_PS_DEFAULT["start_depth"])
 
 
 def worker_network_overrides():
@@ -243,12 +243,12 @@ def worker_network_overrides():
         ])
 
     explicit_defaults = [
-        ("BYTEPS_PARTITION_BYTES_DEFAULT", "BYTEPS_PARTITION_BYTES", BYTEPS_PARTITION_BYTES),
-        ("BYTEPS_ADDRESS_POOL_SIZE_DEFAULT", "BYTEPS_ADDRESS_POOL_SIZE", BYTEPS_ADDRESS_POOL_SIZE),
-        ("BYTEPS_RDMA_RX_DEPTH_DEFAULT", "BYTEPS_RDMA_RX_DEPTH", BYTEPS_RDMA_RX_DEPTH),
-        ("BYTEPS_RDMA_START_DEPTH_DEFAULT", "BYTEPS_RDMA_START_DEPTH", BYTEPS_RDMA_START_DEPTH),
-        ("BYTEPS_ENABLE_FUSED_PUSH_PULL", "BYTEPS_ENABLE_FUSED_PUSH_PULL", FUSED_PUSH_PULL),
-        ("BYTEPS_SERVER_ENABLE_SCHEDULE", "BYTEPS_SERVER_ENABLE_SCHEDULE", SERVER_ENABLE_SCHEDULE),
+        ("MEGASCALE_PS_PARTITION_BYTES_DEFAULT", "MEGASCALE_PS_PARTITION_BYTES", MEGASCALE_PS_PARTITION_BYTES),
+        ("MEGASCALE_PS_ADDRESS_POOL_SIZE_DEFAULT", "MEGASCALE_PS_ADDRESS_POOL_SIZE", MEGASCALE_PS_ADDRESS_POOL_SIZE),
+        ("MEGASCALE_PS_RDMA_RX_DEPTH_DEFAULT", "MEGASCALE_PS_RDMA_RX_DEPTH", MEGASCALE_PS_RDMA_RX_DEPTH),
+        ("MEGASCALE_PS_RDMA_START_DEPTH_DEFAULT", "MEGASCALE_PS_RDMA_START_DEPTH", MEGASCALE_PS_RDMA_START_DEPTH),
+        ("MEGASCALE_PS_ENABLE_FUSED_PUSH_PULL", "MEGASCALE_PS_ENABLE_FUSED_PUSH_PULL", FUSED_PUSH_PULL),
+        ("MEGASCALE_PS_SERVER_ENABLE_SCHEDULE", "MEGASCALE_PS_SERVER_ENABLE_SCHEDULE", SERVER_ENABLE_SCHEDULE),
     ]
     for env_name, script_name, value in explicit_defaults:
         if env_name in os.environ:
@@ -298,9 +298,9 @@ WORKER_EXTRA_EXPORT_NAMES = [
     for name in os.environ.get("WORKER_EXTRA_EXPORT_NAMES", "").split(",")
     if name.strip()
 ]
-BYTEPS_EXTRA_EXPORT_NAMES = [
+MEGASCALE_PS_EXTRA_EXPORT_NAMES = [
     name.strip()
-    for name in os.environ.get("BYTEPS_EXTRA_EXPORT_NAMES", "").split(",")
+    for name in os.environ.get("MEGASCALE_PS_EXTRA_EXPORT_NAMES", "").split(",")
     if name.strip()
 ]
 FILTERED_EXTRA_EXPORT_NAMES = set()
@@ -318,14 +318,14 @@ def extra_exports(names):
 
 
 WORKER_EXTRA_EXPORTS = extra_exports(WORKER_EXTRA_EXPORT_NAMES)
-BYTEPS_EXTRA_EXPORTS = extra_exports(BYTEPS_EXTRA_EXPORT_NAMES)
+MEGASCALE_PS_EXTRA_EXPORTS = extra_exports(MEGASCALE_PS_EXTRA_EXPORT_NAMES)
 QWEN_SCRIPT_NAMES = [
     "train_qwen_3b.sh",
-    "train_qwen_3b_tp_byteps.sh",
-    "train_qwen_3b_tp_dp_byteps.sh",
-    "train_qwen3_4b_tp_byteps.sh",
-    "train_qwen3_4b_tp_dp_byteps.sh",
-    "train_llama_7b_tp_byteps.sh",
+    "train_qwen_3b_tp_megascale_ps.sh",
+    "train_qwen_3b_tp_dp_megascale_ps.sh",
+    "train_qwen3_4b_tp_megascale_ps.sh",
+    "train_qwen3_4b_tp_dp_megascale_ps.sh",
+    "train_llama_7b_tp_megascale_ps.sh",
 ]
 
 
@@ -392,7 +392,7 @@ def write_text(path, text):
     path.write_text(text, encoding="utf-8", errors="replace")
 
 
-def common_env(port, include_byteps=True, worker_use_dpu=True):
+def common_env(port, include_megascale_ps=True, worker_use_dpu=True):
     num_ports_export = f"export DMLC_NUM_PORTS={shlex.quote(DMLC_NUM_PORTS)}\n" if DMLC_NUM_PORTS else ""
     base = f"""
 export DMLC_PS_ROOT_URI=192.168.1.10
@@ -402,7 +402,7 @@ export DMLC_NUM_SERVER={DMLC_NUM_SERVER}
 {num_ports_export.rstrip()}
 unset WORKER_ID
 """
-    if not include_byteps:
+    if not include_megascale_ps:
         return base
     if NETWORK_MODE == "ucx":
         return base + f"""
@@ -420,26 +420,26 @@ export PSLITE_UCX_IB_TRAFFIC_CLASS=106
 export UCX_WARN_UNUSED_ENV_VARS=n
 export PSLITE_UCX_USE_MT_MUTEX=y
 export PSLITE_UCX_RNDV_SCHEME=put_zcopy
-export BYTEPS_ENABLE_FUSED_PUSH_PULL={FUSED_PUSH_PULL}
-export BYTEPS_SERVER_ENABLE_SCHEDULE={SERVER_ENABLE_SCHEDULE}
-export BYTEPS_PARTITION_BYTES={BYTEPS_PARTITION_BYTES}
-export BYTEPS_ADDRESS_POOL_SIZE={BYTEPS_ADDRESS_POOL_SIZE}
-export BYTEPS_RDMA_RX_DEPTH={BYTEPS_RDMA_RX_DEPTH}
-export BYTEPS_RDMA_START_DEPTH={BYTEPS_RDMA_START_DEPTH}
-{BYTEPS_EXTRA_EXPORTS}
+export MEGASCALE_PS_ENABLE_FUSED_PUSH_PULL={FUSED_PUSH_PULL}
+export MEGASCALE_PS_SERVER_ENABLE_SCHEDULE={SERVER_ENABLE_SCHEDULE}
+export MEGASCALE_PS_PARTITION_BYTES={MEGASCALE_PS_PARTITION_BYTES}
+export MEGASCALE_PS_ADDRESS_POOL_SIZE={MEGASCALE_PS_ADDRESS_POOL_SIZE}
+export MEGASCALE_PS_RDMA_RX_DEPTH={MEGASCALE_PS_RDMA_RX_DEPTH}
+export MEGASCALE_PS_RDMA_START_DEPTH={MEGASCALE_PS_RDMA_START_DEPTH}
+{MEGASCALE_PS_EXTRA_EXPORTS}
 """
     return base + f"""
 export DMLC_ENABLE_UCX=0
 export DMLC_ENABLE_RDMA=ibverbs
 export DMLC_USE_GDR=0
 export NCCL_IB_HCA=mlx5_1
-export BYTEPS_ENABLE_FUSED_PUSH_PULL={FUSED_PUSH_PULL}
-export BYTEPS_SERVER_ENABLE_SCHEDULE={SERVER_ENABLE_SCHEDULE}
-export BYTEPS_PARTITION_BYTES={BYTEPS_PARTITION_BYTES}
-export BYTEPS_ADDRESS_POOL_SIZE={BYTEPS_ADDRESS_POOL_SIZE}
-export BYTEPS_RDMA_RX_DEPTH={BYTEPS_RDMA_RX_DEPTH}
-export BYTEPS_RDMA_START_DEPTH={BYTEPS_RDMA_START_DEPTH}
-{BYTEPS_EXTRA_EXPORTS}
+export MEGASCALE_PS_ENABLE_FUSED_PUSH_PULL={FUSED_PUSH_PULL}
+export MEGASCALE_PS_SERVER_ENABLE_SCHEDULE={SERVER_ENABLE_SCHEDULE}
+export MEGASCALE_PS_PARTITION_BYTES={MEGASCALE_PS_PARTITION_BYTES}
+export MEGASCALE_PS_ADDRESS_POOL_SIZE={MEGASCALE_PS_ADDRESS_POOL_SIZE}
+export MEGASCALE_PS_RDMA_RX_DEPTH={MEGASCALE_PS_RDMA_RX_DEPTH}
+export MEGASCALE_PS_RDMA_START_DEPTH={MEGASCALE_PS_RDMA_START_DEPTH}
+{MEGASCALE_PS_EXTRA_EXPORTS}
 """
 
 
@@ -551,7 +551,7 @@ export NCCL_IB_HCA=mlx5_3
 export UCX_NET_DEVICES={DPU_UCX_NET_DEVICES}
 export UCX_MAX_EAGER_RAILS=1
 export UCX_MAX_RNDV_RAILS=1
-export BYTEPS_SERVER_ENABLE_SCHEDULE={dpu_schedule}
+export MEGASCALE_PS_SERVER_ENABLE_SCHEDULE={dpu_schedule}
 cd /usr/local
 timeout {ROLE_TIMEOUT}s bash /usr/local/server.sh > /hosttmp/{run}-server.log 2>&1
 echo rc=$? > /hosttmp/{run}-server.status
@@ -563,7 +563,7 @@ echo rc=$? > /hosttmp/{run}-server.status
 def workload_flag_exports(use_dpu):
     if use_dpu:
         return ""
-    flags = WORKLOAD_CFG["byteps_flags"] if use_dpu else WORKLOAD_CFG["nccl_flags"]
+    flags = WORKLOAD_CFG["megascale_ps_flags"] if use_dpu else WORKLOAD_CFG["nccl_flags"]
     return "\n".join(f"export {k}={v}" for k, v in flags.items())
 
 
@@ -574,7 +574,7 @@ def start_worker(run, host, rank, host_ip, ps_port, master_port, use_dpu=True, r
     network_overrides = worker_network_overrides() if use_dpu else ""
     body = f"""
 echo running > /hosttmp/{run}-worker.status
-{common_env(ps_port, include_byteps=False, worker_use_dpu=use_dpu)}
+{common_env(ps_port, include_megascale_ps=False, worker_use_dpu=use_dpu)}
 if [ -d /hosttmp/qwen_scripts ]; then
   cp /hosttmp/qwen_scripts/*.sh /usr/local/Megatron-LM/examples/qwen/
   chmod +x /usr/local/Megatron-LM/examples/qwen/*.sh
@@ -929,7 +929,7 @@ def main():
     write_text(OUT / "statuses.tsv", "\n".join(status_lines) + "\n")
 
     md = [
-        f"# Megatron host-server vs DPU-server BytePS {NETWORK_MODE.upper()} comparison",
+        f"# Megatron host-server vs DPU-server MegaScalePS {NETWORK_MODE.upper()} comparison",
         "",
         f"- date: {time.strftime('%Y-%m-%d %H:%M:%S')}",
         f"- workload: `{WORKLOAD}`",
@@ -944,7 +944,7 @@ def main():
         f"- runner extra worker exports: `{WORKER_EXTRA_EXPORTS.replace(chr(10), '; ') or 'none'}`",
         f"- qwen script source dir: `{QWEN_SCRIPT_SOURCE_DIR or str(ROOT / 'Megatron-LM' / 'examples' / 'qwen')}`",
         f"- model overrides: `{MODEL_EXPORTS.replace(chr(10), '; ')}`",
-        "- worker env policy: BytePS default attempts export only explicit network/BytePS knobs requested by the runner; worker scripts otherwise use their defaults.",
+        "- worker env policy: MegaScalePS default attempts export only explicit network/MegaScalePS knobs requested by the runner; worker scripts otherwise use their defaults.",
         f"- UCX rail retry variants: `{','.join(UCX_RAIL_VARIANTS)}`; only non-default retries export `UCX_RAIL_MODE` to workers.",
         f"- DMLC_NUM_PORTS: `{DMLC_NUM_PORTS or 'unset'}`",
         "- worker env exceptions: runner exports topology/runtime values (`DMLC_*` root/port/count, `DMLC_NODE_HOST`, `MASTER_ADDR`, `MASTER_PORT`, `NODE_RANK`); NCCL case also exports `USE_DPU*=0` to select baseline.",
@@ -955,8 +955,8 @@ def main():
         f"- CDS backend switch: `{CDS_BACKEND_SWITCH_ENV}=1 -> ucx, 0 -> rdma` ({'enabled' if USE_CDS_AS_BACKEND_SWITCH else 'disabled'}; value `{CDS_SWITCH_VALUE or 'unset'}`)",
         f"- {CDS_BACKEND_SWITCH_ENV} ps-lite pass-through: `{'enabled' if PASS_CDS_TO_PSLITE else 'disabled'}`",
         f"- filtered extra exports: `{','.join(sorted(FILTERED_EXTRA_EXPORT_NAMES)) or 'none'}`",
-        f"- scheduler/server BytePS env: fused push/pull={FUSED_PUSH_PULL}, partition {BYTEPS_PARTITION_BYTES}, address pool {BYTEPS_ADDRESS_POOL_SIZE}, rx depth {BYTEPS_RDMA_RX_DEPTH}, start depth {BYTEPS_RDMA_START_DEPTH}",
-        f"- BYTEPS_SERVER_ENABLE_SCHEDULE: `{SERVER_ENABLE_SCHEDULE or 'runner-default-dpu-0'}`",
+        f"- scheduler/server MegaScalePS env: fused push/pull={FUSED_PUSH_PULL}, partition {MEGASCALE_PS_PARTITION_BYTES}, address pool {MEGASCALE_PS_ADDRESS_POOL_SIZE}, rx depth {MEGASCALE_PS_RDMA_RX_DEPTH}, start depth {MEGASCALE_PS_RDMA_START_DEPTH}",
+        f"- MEGASCALE_PS_SERVER_ENABLE_SCHEDULE: `{SERVER_ENABLE_SCHEDULE or 'runner-default-dpu-0'}`",
         f"- max retries per case: `{MAX_RETRIES}`",
         "- worker id policy: no external WORKER_ID; script sets `DMLC_WORKER_ID=$NODE_RANK`",
         "",

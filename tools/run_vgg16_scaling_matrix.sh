@@ -14,18 +14,18 @@ all_workers=(gpu01 gpu02 gpu03 gpu04 asus01 asus02 asus03 asus04)
 all_servers=(R750-1 R750-2 R750-3 R750-4 server12 server13 server14 server15)
 
 scales=(${SCALES:-2 4 8})
-systems=(${SYSTEMS:-ddp megascale native})
+systems=(${SYSTEMS:-ddp megascale_ps native})
 
-ddp_container="${DDP_CONTAINER:-byteps-latest}"
-megascale_container="${MEGASCALE_CONTAINER:-byteps-latest}"
-native_container="${NATIVE_CONTAINER:-byteps-native}"
+ddp_container="${DDP_CONTAINER:-megascale_ps-latest}"
+megascale_ps_container="${MEGASCALE_PS_CONTAINER:-megascale_ps-latest}"
+native_container="${NATIVE_CONTAINER:-megascale_ps-native}"
 
 root_uri="${DMLC_PS_ROOT_URI:-192.168.1.10}"
 root_port="${DMLC_PS_ROOT_PORT:-9010}"
 master_addr="${MASTER_ADDR:-192.168.1.10}"
 master_port_base="${MASTER_PORT_BASE:-29610}"
 timeout_s="${TIMEOUT_S:-900}"
-byteps_extra_env="${BYTEPS_EXTRA_ENV:-}"
+megascale_ps_extra_env="${MEGASCALE_PS_EXTRA_ENV:-}"
 
 remote_exec() {
   local host="$1" container="$2" cmd="$3"
@@ -73,12 +73,12 @@ clean_workers() {
   done
 }
 
-clean_byteps() {
+clean_megascale_ps() {
   local container="$1"
-  clean_workers "$container" "[w]orker.sh|[b]enchmark_byteps|[b]pslaunch|[v]gg16-scaling"
+  clean_workers "$container" "[w]orker.sh|[b]enchmark_megascale_ps|[b]pslaunch|[v]gg16-scaling"
   remote_exec gpu01 "$container" 'pids=$(pgrep -f "[s]cheduler.sh|[v]gg16-scaling" || true); if [ -n "$pids" ]; then kill -TERM $pids 2>/dev/null || true; fi' >/dev/null 2>&1 || true
   for h in "${servers[@]}"; do
-    remote_exec "$h" "$container" 'pids=$(pgrep -f "[s]erver.sh|[b]enchmark_byteps|[b]pslaunch|[v]gg16-scaling" || true); if [ -n "$pids" ]; then kill -TERM $pids 2>/dev/null || true; fi' >/dev/null 2>&1 || true
+    remote_exec "$h" "$container" 'pids=$(pgrep -f "[s]erver.sh|[b]enchmark_megascale_ps|[b]pslaunch|[v]gg16-scaling" || true); if [ -n "$pids" ]; then kill -TERM $pids 2>/dev/null || true; fi' >/dev/null 2>&1 || true
   done
   sleep 3
 }
@@ -161,7 +161,7 @@ export NCCL_IB_HCA=mlx5_1
 export NCCL_IB_GID_INDEX=\${NCCL_IB_GID_INDEX:-3}
 export NCCL_IB_TC=\${NCCL_IB_TC:-106}
 cd /tmp
-timeout ${timeout_s}s bash /usr/local/byteps/sh/worker_ddp.sh --no-comm-log > /tmp/${run}-worker.log 2>&1
+timeout ${timeout_s}s bash /usr/local/megascale_ps/sh/worker_ddp.sh --no-comm-log > /tmp/${run}-worker.log 2>&1
 echo rc=\$? > /tmp/${run}-worker.status" >/dev/null || return 1
   done
   wait_workers "$run" "$container" "$scale" "DDP"
@@ -176,22 +176,22 @@ echo rc=\$? > /tmp/${run}-worker.status" >/dev/null || return 1
   echo -e "DDP\t$scale\t0\tvgg16\t$container\t$status\t$parsed\t$rank0_log" >> "$TSV"
 }
 
-run_byteps() {
+run_megascale_ps() {
   local label="$1" scale="$2" container="$3"
   local run="vgg16-scaling-${label}-${scale}w${scale}s-$BATCH"
   local envs role_extra="" worker_extra=""
   envs="$(topology_env "$scale")"
-  if [[ "$label" == "Native-BytePS" ]]; then
-    role_extra="$byteps_extra_env"
-    worker_extra="$byteps_extra_env"
+  if [[ "$label" == "Native-MegaScalePS" ]]; then
+    role_extra="$megascale_ps_extra_env"
+    worker_extra="$megascale_ps_extra_env"
   fi
-  clean_byteps "$container"
+  clean_megascale_ps "$container"
   echo "[$(date '+%H:%M:%S')] START ${label} scale=${scale} workers=$(join_by_space "${workers[@]}") servers=$(join_by_space "${servers[@]}")"
   remote_exec_d gpu01 "$container" "echo running > /tmp/${run}-scheduler.status
 $envs
 $role_extra
 cd /tmp
-bash /usr/local/byteps/sh/scheduler.sh > /tmp/${run}-scheduler.log 2>&1
+bash /usr/local/megascale_ps/sh/scheduler.sh > /tmp/${run}-scheduler.log 2>&1
 echo rc=\$? > /tmp/${run}-scheduler.status" >/dev/null || return 1
   sleep 2
   for h in "${servers[@]}"; do
@@ -199,7 +199,7 @@ echo rc=\$? > /tmp/${run}-scheduler.status" >/dev/null || return 1
 $envs
 $role_extra
 cd /tmp
-bash /usr/local/byteps/sh/server.sh > /tmp/${run}-server.log 2>&1
+bash /usr/local/megascale_ps/sh/server.sh > /tmp/${run}-server.log 2>&1
 echo rc=\$? > /tmp/${run}-server.status" >/dev/null || return 1
   done
   sleep 6
@@ -210,7 +210,7 @@ $envs
 $worker_extra
 export WORKER_ID=$idx
 cd /tmp
-timeout ${timeout_s}s bash /usr/local/byteps/sh/worker.sh > /tmp/${run}-worker.log 2>&1
+timeout ${timeout_s}s bash /usr/local/megascale_ps/sh/worker.sh > /tmp/${run}-worker.log 2>&1
 echo rc=\$? > /tmp/${run}-worker.status" >/dev/null || return 1
   done
   wait_workers "$run" "$container" "$scale" "$label"
@@ -223,7 +223,7 @@ echo rc=\$? > /tmp/${run}-worker.status" >/dev/null || return 1
   done
   local status rank0_log parsed
   status="$(worker_statuses "$run" "$container")"
-  clean_byteps "$container"
+  clean_megascale_ps "$container"
   rank0_log="$OUT_DIR/logs/${run}-gpu01-worker.log"
   parsed="$(parse_rank0 "$rank0_log" "$scale")"
   echo -e "$label\t$scale\t$scale\tvgg16\t$container\t$status\t$parsed\t$rank0_log" >> "$TSV"
@@ -237,8 +237,8 @@ for scale in "${scales[@]}"; do
   for sys in "${systems[@]}"; do
     case "$sys" in
       ddp) run_ddp "$scale" "$ddp_container" ;;
-      megascale) run_byteps "MegaScale-PS" "$scale" "$megascale_container" ;;
-      native) run_byteps "Native-BytePS" "$scale" "$native_container" ;;
+      megascale_ps) run_megascale_ps "MegaScale-PS" "$scale" "$megascale_ps_container" ;;
+      native) run_megascale_ps "Native-MegaScalePS" "$scale" "$native_container" ;;
       *) echo "unknown system: $sys" >&2; exit 2 ;;
     esac
   done
@@ -252,7 +252,7 @@ done
   echo
   echo "Workers are selected from: ${all_workers[*]}"
   echo "Servers are selected from: ${all_servers[*]}"
-  echo "DDP uses workers only. BytePS-style systems use equal worker and server counts on disjoint machines."
+  echo "DDP uses workers only. MegaScalePS-style systems use equal worker and server counts on disjoint machines."
   echo
   echo "| System | Workers | Servers | Total img/s | Per-GPU img/s | Container |"
   echo "| --- | ---: | ---: | ---: | ---: | --- |"

@@ -2567,7 +2567,7 @@ def _add_distributed_args(parser):
     group.add_argument('--use-dpu-reduce', action='store_true',
                        default=False, help='If set, use DPU for grad reduce.')
     group.add_argument('--use-dpu-tp-reduce', action='store_true',
-                       default=False, help='If set, use BytePS for TP all-reduce.')
+                       default=False, help='If set, use MegaScalePS for TP all-reduce.')
     group.add_argument('--defer-embedding-wgrad-compute', action='store_true',
                        default=False, help='If set, defers the vocabulary projection linear layer weight'
                        'gradient compute to pipeline flush.', dest='defer_embedding_wgrad_compute')

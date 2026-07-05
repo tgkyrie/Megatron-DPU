@@ -5,7 +5,7 @@ from contextlib import contextmanager
 from typing import Optional
 
 import torch
-import byteps.torch as bps
+import megascale_ps.torch as bps
 
 from .. import parallel_state
 from ..config_logger import has_config_logger_enabled, log_config_to_disk
@@ -312,8 +312,8 @@ class DistributedDataParallel(_BaseDataParallel):
         if self.ddp_config.use_dpu_reduce and not self.ddp_config.use_distributed_optimizer:
             if bps.size() < self.intra_dp_cp_group.size():
                 raise RuntimeError(
-                    "BytePS world size is smaller than Megatron data-parallel size: "
-                    f"byteps.size()={bps.size()} vs dp_size={self.intra_dp_cp_group.size()}."
+                    "MegaScalePS world size is smaller than Megatron data-parallel size: "
+                    f"megascale_ps.size()={bps.size()} vs dp_size={self.intra_dp_cp_group.size()}."
                 )
 
         # Allocate the param+grad buffers for dense params' grads.

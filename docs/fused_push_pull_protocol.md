@@ -1,8 +1,8 @@
-# BytePS fused push_pull 协议设计草案
+# MegaScalePS fused push_pull 协议设计草案
 
 本文记录 `feat/fused-push-pull-protocol` 分支的协议融合方案。目标不是直接删除
 `push response` 和 `pull request`，而是把它们承载的语义合并到一次
-`fused push_pull` 请求/响应中，减少控制面往返，同时保持 BytePS 当前同步语义。
+`fused push_pull` 请求/响应中，减少控制面往返，同时保持 MegaScalePS 当前同步语义。
 
 ## 1. 当前四段流程
 
@@ -17,7 +17,7 @@ server -> worker: pull response      携带聚合后的梯度分片数据
 
 对应主要代码：
 
-- worker 队列串联：`byteps/byteps/common/operations.cc`
+- worker 队列串联：`megascale_ps/megascale_ps/common/operations.cc`
   - `GetPushQueueList()` 加入 `PUSH`
   - `GetPullQueueList()` 加入 `PULL`
 - worker 发送：
@@ -27,7 +27,7 @@ server -> worker: pull response      携带聚合后的梯度分片数据
   - `KVWorker::Process()` 收到 response 后推进 timestamp
   - `Customer::Receiving()` 负责 response 计数和唤醒
 - server 聚合：
-  - `BytePSHandler()` 收 push，server engine 完成 copy/sum/all-recv
+  - `MegaScalePSHandler()` 收 push，server engine 完成 copy/sum/all-recv
   - `SendPushResponse()` 发空 push response
   - `SendPullResponse()` 发 pull response
 - transport：
@@ -52,7 +52,7 @@ server -> worker: pull response      携带聚合后的梯度分片数据，完�
 关键约束：
 
 - 保留旧路径作为默认路径。
-- 通过环境变量开关启用，例如 `BYTEPS_ENABLE_FUSED_PUSH_PULL=1`。
+- 通过环境变量开关启用，例如 `MEGASCALE_PS_ENABLE_FUSED_PUSH_PULL=1`。
 - 第一阶段只支持默认 dense push_pull，不覆盖 group register、compressor 注册、async
   training 和 GDR 特化路径。
 - fused request 的 timestamp 必须覆盖完整 push_pull，而不是只覆盖 push。
@@ -70,7 +70,7 @@ RawMeta::fused_push_pull
 
 用途：
 
-- transport 不需要理解 BytePS 的 `RequestType` 编码；
+- transport 不需要理解 MegaScalePS 的 `RequestType` 编码；
 - fused push request 仍然保持 `push=true, request=true`，同时标记这是完整 push_pull；
 - server 可按 `req_meta.fused_push_pull` 生成 synthetic pull meta。
 
@@ -111,7 +111,7 @@ int ZFusedPushPull(const SArray<Key>& keys,
 
 ### 3.4 server handler
 
-`BytePSHandler()` 对 fused push request：
+`MegaScalePSHandler()` 对 fused push request：
 
 - 正常执行现有 push 聚合逻辑；
 - 不调用 `SendPushResponse()`；
@@ -173,7 +173,7 @@ fused request 仍是 data message，但需要额外缓存 output buffer 地址�
 最小验证顺序：
 
 1. fused 关闭：确认旧路径行为和性能不变；
-2. `1w1s` BytePS-only `vgg16`：确认能看到 `Model:`、`Running warmup`、
+2. `1w1s` MegaScalePS-only `vgg16`：确认能看到 `Model:`、`Running warmup`、
    `Total img/sec`；
 3. `2w2s`：确认多 worker 聚合语义正确；
 4. `8w8s`：对比 baseline 吞吐和 server profile 控制消息数量。

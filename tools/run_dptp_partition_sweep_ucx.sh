@@ -26,7 +26,7 @@ run_one() {
       EVAL_ITERS=0 \
       NETWORK_MODE=ucx \
       UCX_RAIL_VARIANTS=single \
-      BYTEPS_PARTITION_BYTES_DEFAULT="$bytes" \
+      MEGASCALE_PS_PARTITION_BYTES_DEFAULT="$bytes" \
       MAX_RETRIES="${MAX_RETRIES_OVERRIDE:-2}" \
       MONITOR_TIMEOUT=1200 \
       NO_ITER_TIMEOUT=420 \
@@ -69,7 +69,7 @@ cat > "$OUT_ROOT/run_notes.md" <<EOF
 
 Date: $(date -Is)
 
-This run sweeps BytePS partition size for the TP+DP Qwen3-4B workload using
+This run sweeps MegaScalePS partition size for the TP+DP Qwen3-4B workload using
 short runs by default.
 
 Summary:

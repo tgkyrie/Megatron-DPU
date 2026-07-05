@@ -12,9 +12,9 @@ TSV="$OUT_DIR/results.tsv"
 
 workers=(gpu01 gpu02 gpu03 gpu04 asus01 asus02 asus03 asus04)
 all_servers=(R750-1 R750-2 R750-3 R750-4 server12 server13 server14 server15)
-byteps_nodes=(gpu01 R750-1 R750-2 R750-3 R750-4 server12 server13 server14 server15)
+megascale_ps_nodes=(gpu01 R750-1 R750-2 R750-3 R750-4 server12 server13 server14 server15)
 worker_container="${WORKER_CONTAINER:-megatron-dpu-latest}"
-byteps_container="${BYTEPS_CONTAINER:-byteps-latest}"
+megascale_ps_container="${MEGASCALE_PS_CONTAINER:-megascale_ps-latest}"
 root_uri="192.168.1.10"
 root_port="9010"
 port=19300
@@ -41,10 +41,10 @@ servers_for_count() {
 
 clean_all() {
   for h in "${workers[@]}"; do
-    remote_exec "$h" "$worker_container" 'pids=$(pgrep -f "[t]orchrun|[p]retrain_gpt|[t]rain_.*byteps|[t]rain_qwen_3b.sh" || true); if [ -n "$pids" ]; then kill -TERM $pids 2>/dev/null || true; fi' >/dev/null 2>&1 || true
+    remote_exec "$h" "$worker_container" 'pids=$(pgrep -f "[t]orchrun|[p]retrain_gpt|[t]rain_.*megascale_ps|[t]rain_qwen_3b.sh" || true); if [ -n "$pids" ]; then kill -TERM $pids 2>/dev/null || true; fi' >/dev/null 2>&1 || true
   done
-  for h in "${byteps_nodes[@]}"; do
-    remote_exec "$h" "$byteps_container" 'pids=$(pgrep -f "[s]cheduler.sh|[s]erver.sh|[b]pslaunch|[b]enchmark_byteps|[p]ushpull_bench" || true); if [ -n "$pids" ]; then kill -TERM $pids 2>/dev/null || true; fi' >/dev/null 2>&1 || true
+  for h in "${megascale_ps_nodes[@]}"; do
+    remote_exec "$h" "$megascale_ps_container" 'pids=$(pgrep -f "[s]cheduler.sh|[s]erver.sh|[b]pslaunch|[b]enchmark_megascale_ps|[p]ushpull_bench" || true); if [ -n "$pids" ]; then kill -TERM $pids 2>/dev/null || true; fi' >/dev/null 2>&1 || true
   done
   sleep 3
 }
@@ -57,11 +57,11 @@ export DMLC_PS_ROOT_PORT=$root_port
 export DMLC_NUM_SERVER=$server_count
 export DMLC_NUM_WORKER=8
 export DMLC_USE_GDR=0
-export BYTEPS_ENABLE_FUSED_PUSH_PULL=$fused
-export BYTEPS_PARTITION_BYTES=$partition
-export BYTEPS_ADDRESS_POOL_SIZE=$address_pool
-export BYTEPS_RDMA_RX_DEPTH=$rx_depth
-export BYTEPS_RDMA_START_DEPTH=32
+export MEGASCALE_PS_ENABLE_FUSED_PUSH_PULL=$fused
+export MEGASCALE_PS_PARTITION_BYTES=$partition
+export MEGASCALE_PS_ADDRESS_POOL_SIZE=$address_pool
+export MEGASCALE_PS_RDMA_RX_DEPTH=$rx_depth
+export MEGASCALE_PS_RDMA_START_DEPTH=32
 export DMLC_ENABLE_UCX=0
 export DMLC_ENABLE_RDMA=ibverbs
 unset UCX_TLS UCX_NET_DEVICES UCX_MAX_EAGER_RAILS UCX_MAX_RNDV_RAILS UCX_RNDV_THRESH UCX_IB_TRAFFIC_CLASS PSLITE_UCX_IB_TRAFFIC_CLASS PSLITE_UCX_USE_MT_MUTEX PSLITE_UCX_RNDV_SCHEME UCX_WARN_UNUSED_ENV_VARS
@@ -78,13 +78,13 @@ export DMLC_NUM_WORKER=8
 export DMLC_ENABLE_UCX=0
 export DMLC_ENABLE_RDMA=ibverbs
 EOF
-  [[ "$partition" != "4194304" ]] && echo "export BYTEPS_PARTITION_BYTES=$partition"
-  [[ "$address_pool" != "10240" ]] && echo "export BYTEPS_ADDRESS_POOL_SIZE=$address_pool"
-  [[ "$rx_depth" != "1024" ]] && echo "export BYTEPS_RDMA_RX_DEPTH=$rx_depth"
-  [[ "$fused" != "1" ]] && echo "export BYTEPS_ENABLE_FUSED_PUSH_PULL=$fused"
+  [[ "$partition" != "4194304" ]] && echo "export MEGASCALE_PS_PARTITION_BYTES=$partition"
+  [[ "$address_pool" != "10240" ]] && echo "export MEGASCALE_PS_ADDRESS_POOL_SIZE=$address_pool"
+  [[ "$rx_depth" != "1024" ]] && echo "export MEGASCALE_PS_RDMA_RX_DEPTH=$rx_depth"
+  [[ "$fused" != "1" ]] && echo "export MEGASCALE_PS_ENABLE_FUSED_PUSH_PULL=$fused"
 }
 
-start_byteps() {
+start_megascale_ps() {
   local run="$1" server_count="$2" partition="$3" address_pool="$4" rx_depth="$5" fused="$6"
   local envs
   envs="$(net_env "$server_count" "$partition" "$address_pool" "$rx_depth" "$fused")"
@@ -93,7 +93,7 @@ $envs
 cd /usr/local
 bash /usr/local/scheduler.sh > /tmp/${run}-scheduler.log 2>&1
 echo rc=\$? > /tmp/${run}-scheduler.status"
-  remote_exec_d gpu01 "$byteps_container" "$cmd" >/dev/null || return 1
+  remote_exec_d gpu01 "$megascale_ps_container" "$cmd" >/dev/null || return 1
   sleep 2
 
   local server_list
@@ -104,7 +104,7 @@ $envs
 cd /usr/local
 bash /usr/local/server.sh > /tmp/${run}-server.log 2>&1
 echo rc=\$? > /tmp/${run}-server.status"
-    remote_exec_d "$h" "$byteps_container" "$cmd" >/dev/null || return 1
+    remote_exec_d "$h" "$megascale_ps_container" "$cmd" >/dev/null || return 1
   done
   sleep 6
 }
@@ -125,7 +125,7 @@ export TP_SIZE=2
 export NODE_RANK=$idx
 export NCCL_IB_HCA=mlx5_1
 cd /usr/local/Megatron-LM
-timeout 1200s bash examples/qwen/train_qwen_3b_tp_dp_byteps.sh > /tmp/${run}-worker.log 2>&1
+timeout 1200s bash examples/qwen/train_qwen_3b_tp_dp_megascale_ps.sh > /tmp/${run}-worker.log 2>&1
 echo rc=\$? > /tmp/${run}-worker.status"
     remote_exec_d "$h" "$worker_container" "$cmd" >/dev/null || return 1
   done
@@ -180,7 +180,7 @@ write_headers() {
     echo "Workers: ${workers[*]}"
     echo "Servers: ${all_servers[*]}"
     echo "Worker container: $worker_container"
-    echo "BytePS container: $byteps_container"
+    echo "MegaScalePS container: $megascale_ps_container"
     echo "Root: $root_uri:$root_port"
     echo "Workload: qwen_3b TP+DP, 8 workers, TP_SIZE=2, TRAIN_ITERS=10"
     echo "Stats: rank7/asus04, iteration >= 2"
@@ -229,7 +229,7 @@ run_one() {
     final_port="$mport"
     echo "[$(date '+%H:%M:%S')] START exp=$exp category=$cat servers=$server_count partition=$partition fused=$fused attempt=$attempts port=$mport"
     clean_all
-    if ! start_byteps "$run" "$server_count" "$partition" "$address_pool" "$rx_depth" "$fused"; then
+    if ! start_megascale_ps "$run" "$server_count" "$partition" "$address_pool" "$rx_depth" "$fused"; then
       status="START_FAIL"
       cleanup_after_run
       continue

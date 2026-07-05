@@ -11,7 +11,7 @@ from datetime import timedelta
 import numpy as np
 import torch
 
-import byteps.torch as bps
+import megascale_ps.torch as bps
 
 from megatron.core import mpu, tensor_parallel
 from megatron.core.fusions.fused_bias_dropout import bias_dropout_add_fused_train

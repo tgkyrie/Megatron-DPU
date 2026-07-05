@@ -1,7 +1,7 @@
 .git
 .github
-byteps/sh/**
-!byteps/sh/*.sh
+megascale_ps/sh/**
+!megascale_ps/sh/*.sh
 Megatron-LM/.git
 **/__pycache__/
 **/*.pyc

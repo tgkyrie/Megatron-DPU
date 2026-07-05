@@ -1,6 +1,6 @@
 ########################
 # Dockerfile.arm64server
-# - arm64 BytePS server-only image
+# - arm64 MegaScalePS server-only image
 # - single-stage, keep fuller environment
 # - fix ps-lite zmq/test build issue for server-only
 ########################
@@ -8,21 +8,21 @@
 FROM ubuntu:22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
-ARG BYTEPS_BASE_PATH=/usr/local
-ARG BYTEPS_PATH=${BYTEPS_BASE_PATH}/byteps
+ARG MEGASCALE_PS_BASE_PATH=/usr/local
+ARG MEGASCALE_PS_PATH=${MEGASCALE_PS_BASE_PATH}/megascale_ps
 ARG ENABLE_RDMA=1
 ARG UCX_VERSION=1.20.0
 ARG UCX_PREFIX=/opt/ucx-1.20
-ENV BYTEPS_BASE_PATH=${BYTEPS_BASE_PATH}
-ENV BYTEPS_PATH=${BYTEPS_PATH}
-ENV BYTEPS_SERVER_ONLY=1
-ENV BYTEPS_WITH_UCX=1
-ENV BYTEPS_UCX_HOME=${UCX_PREFIX}
-ENV BYTEPS_FORCE_NO_CUDA=1
-ENV BYTEPS_UCX_WITH_CUDA=0
-ENV BYTEPS_PSLITE_WITH_CUDA=0
+ENV MEGASCALE_PS_BASE_PATH=${MEGASCALE_PS_BASE_PATH}
+ENV MEGASCALE_PS_PATH=${MEGASCALE_PS_PATH}
+ENV MEGASCALE_PS_SERVER_ONLY=1
+ENV MEGASCALE_PS_WITH_UCX=1
+ENV MEGASCALE_PS_UCX_HOME=${UCX_PREFIX}
+ENV MEGASCALE_PS_FORCE_NO_CUDA=1
+ENV MEGASCALE_PS_UCX_WITH_CUDA=0
+ENV MEGASCALE_PS_PSLITE_WITH_CUDA=0
 
-WORKDIR ${BYTEPS_BASE_PATH}
+WORKDIR ${MEGASCALE_PS_BASE_PATH}
 
 RUN set -eux; \
     apt-get update; \
@@ -58,7 +58,7 @@ RUN set -eux; \
     mkdir build; \
     cd build; \
     ../contrib/configure-release \
-      --prefix="${BYTEPS_UCX_HOME}" \
+      --prefix="${MEGASCALE_PS_UCX_HOME}" \
       --enable-mt \
       ${ucx_rdma_args} \
       --without-cuda \
@@ -69,20 +69,20 @@ RUN set -eux; \
       --disable-params-check; \
     make -j"$(nproc)"; \
     make install; \
-    echo "${BYTEPS_UCX_HOME}/lib" > /etc/ld.so.conf.d/byteps-ucx.conf; \
+    echo "${MEGASCALE_PS_UCX_HOME}/lib" > /etc/ld.so.conf.d/megascale_ps-ucx.conf; \
     ldconfig; \
-    "${BYTEPS_UCX_HOME}/bin/ucx_info" -v; \
+    "${MEGASCALE_PS_UCX_HOME}/bin/ucx_info" -v; \
     rm -rf /tmp/ucx
 
-ENV PATH="${BYTEPS_UCX_HOME}/bin:/usr/local/bin:${PATH}"
-ENV LD_LIBRARY_PATH="${BYTEPS_UCX_HOME}/lib"
+ENV PATH="${MEGASCALE_PS_UCX_HOME}/bin:/usr/local/bin:${PATH}"
+ENV LD_LIBRARY_PATH="${MEGASCALE_PS_UCX_HOME}/lib"
 
 # Convenience launch scripts.
-COPY ./byteps/sh/ /usr/local/
+COPY ./megascale_ps/sh/ /usr/local/
 RUN set -eux; \
     chmod +x /usr/local/*.sh
 
-COPY ./byteps/ ${BYTEPS_PATH}/
+COPY ./megascale_ps/ ${MEGASCALE_PS_PATH}/
 
 # arm64: 去掉 x86 专属编译选项
 RUN set -eux; \
@@ -94,15 +94,15 @@ RUN set -eux; \
         -e "s/'-msse2',?[[:space:]]*//g" \
         -e "s/'-stdlib=libc\\+\\+',?[[:space:]]*//g" \
         -e "s/'-march=native'/'-march=armv8-a'/g" \
-        "${BYTEPS_PATH}/setup.py"; \
-      if [ -d "${BYTEPS_PATH}/3rdparty/ps-lite" ]; then \
-        grep -RIl -- "-msse2" "${BYTEPS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-msse2([[:space:]]|$)/ /g'; \
-        grep -RIl -- "-mno-avx512f" "${BYTEPS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-mno-avx512f([[:space:]]|$)/ /g'; \
+        "${MEGASCALE_PS_PATH}/setup.py"; \
+      if [ -d "${MEGASCALE_PS_PATH}/3rdparty/ps-lite" ]; then \
+        grep -RIl -- "-msse2" "${MEGASCALE_PS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-msse2([[:space:]]|$)/ /g'; \
+        grep -RIl -- "-mno-avx512f" "${MEGASCALE_PS_PATH}/3rdparty/ps-lite" | xargs -r sed -i -E 's/(^|[[:space:]])-mno-avx512f([[:space:]]|$)/ /g'; \
       fi; \
     fi
 
 RUN set -eux; \
-    cd "${BYTEPS_PATH}"; \
+    cd "${MEGASCALE_PS_PATH}"; \
     python3 setup.py install; \
     ldconfig
 

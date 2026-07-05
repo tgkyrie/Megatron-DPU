@@ -12,9 +12,9 @@ from typing import Dict, List, Optional
 import torch
 from torch.distributed import _coalescing_manager
 
-from byteps.torch import ops as bps_ops
+from megascale_ps.torch import ops as bps_ops
 
-from .byteps_collectives import byteps_allreduce_async_inplace, byteps_allreduce_inplace
+from .megascale_ps_collectives import megascale_ps_allreduce_async_inplace, megascale_ps_allreduce_inplace
 
 import megatron.core.nccl_allocator as nccl_allocator
 from megatron.core import parallel_state
@@ -385,23 +385,23 @@ class _ParamAndGradBucketGroup:
         else:
             communication_group = self.data_parallel_group
         
-            # 如果开启了 BytePS 且未使用分布式优化器 → 用 BytePS 做 DP 梯度同步
+            # 如果开启了 MegaScalePS 且未使用分布式优化器 → 用 MegaScalePS 做 DP 梯度同步
         if (not self.ddp_config.use_distributed_optimizer
                 and getattr(self.ddp_config, "use_dpu_reduce", False)):
 
-            # 根据 average_in_collective 决定 BytePS 是做 SUM 还是 AVG
+            # 根据 average_in_collective 决定 MegaScalePS 是做 SUM 还是 AVG
             # 注意：上面已经做过 gradient_scaling_factor *= ，这里要保持语义一致
-            byteps_average = self.ddp_config.average_in_collective
+            megascale_ps_average = self.ddp_config.average_in_collective
 
             if async_op:
                 handles = []
                 for _, bucket in enumerate(self.buckets):
-                    handle = byteps_allreduce_async_inplace(
+                    handle = megascale_ps_allreduce_async_inplace(
                         bucket.grad_data,
                         group=communication_group,
                         scope='dp',
                         logical_name=f"bucket_{bucket.bucket_id}",
-                        average=byteps_average,
+                        average=megascale_ps_average,
                         version=0,
                         priority=0,
                     )
@@ -410,12 +410,12 @@ class _ParamAndGradBucketGroup:
                 return
             else:
                 for _, bucket in enumerate(self.buckets):
-                    byteps_allreduce_inplace(
+                    megascale_ps_allreduce_inplace(
                         bucket.grad_data,
                         group=communication_group,
                         scope='dp',
                         logical_name=f"bucket_{bucket.bucket_id}",
-                        average=byteps_average,
+                        average=megascale_ps_average,
                         version=0,
                         priority=0,
                     )
@@ -516,7 +516,7 @@ class _ParamAndGradBucketGroup:
 
         else:
             assert self.grad_reduce_handle is not None, (
-                f"BytePS Communication call has not been issued for this bucket "
+                f"MegaScalePS Communication call has not been issued for this bucket "
                 f"({len(self.params_with_grad)}/{len(self.params)} params have grad available)"
             )
             handles = self.grad_reduce_handle

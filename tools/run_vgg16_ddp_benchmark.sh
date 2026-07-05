@@ -10,7 +10,7 @@ SUMMARY="$OUT_DIR/summary.md"
 TSV="$OUT_DIR/results.tsv"
 
 workers=(gpu01 gpu02 gpu03 gpu04 asus01 asus02 asus03 asus04)
-container="${BYTEPS_CONTAINER:-byteps-latest}"
+container="${MEGASCALE_PS_CONTAINER:-megascale_ps-latest}"
 master_addr="192.168.1.10"
 master_port="${MASTER_PORT:-29610}"
 
@@ -55,8 +55,8 @@ export NCCL_SOCKET_IFNAME=$ifname
 export NCCL_IB_HCA=mlx5_1
 export NCCL_IB_GID_INDEX=${NCCL_IB_GID_INDEX:-3}
 export NCCL_IB_TC=${NCCL_IB_TC:-106}
-cd /usr/local/byteps
-timeout 900s bash /usr/local/byteps/sh/worker_ddp.sh --no-comm-log > /tmp/${run}-worker.log 2>&1
+cd /usr/local/megascale_ps
+timeout 900s bash /usr/local/megascale_ps/sh/worker_ddp.sh --no-comm-log > /tmp/${run}-worker.log 2>&1
 echo rc=\$? > /tmp/${run}-worker.status"
     remote_exec_d "$h" "$cmd" >/dev/null || return 1
   done
@@ -147,7 +147,7 @@ echo -e "DDP\t8\tvgg16\t$final_status\t$per_mean\t$per_conf\t$total_mean\t$total
   echo
   echo "- Workers: ${workers[*]}"
   echo "- Container: $container"
-  echo "- Worker script: /usr/local/byteps/sh/worker_ddp.sh --no-comm-log"
+  echo "- Worker script: /usr/local/megascale_ps/sh/worker_ddp.sh --no-comm-log"
   echo "- Benchmark defaults come from worker_ddp.sh: torch_ddp_benchmark.py --model vgg16 --num-iters 10"
   echo "- Runner exports: MASTER_ADDR, MASTER_PORT, WORLD_SIZE, RANK only"
   echo "- Runner also sets NCCL_SOCKET_IFNAME per worker host so gpu*/asus* use their actual RoCE interface"

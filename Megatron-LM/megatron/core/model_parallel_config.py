@@ -17,10 +17,10 @@ class ModelParallelConfig:
     # Model parallelism
     ###################
     use_dpu_reduce: bool = False
-    """Use BytePS for data-parallel gradient all-reduce."""
+    """Use MegaScalePS for data-parallel gradient all-reduce."""
 
     use_dpu_tp_reduce: bool = False
-    """Use BytePS for tensor-parallel all-reduce."""
+    """Use MegaScalePS for tensor-parallel all-reduce."""
 
     tensor_model_parallel_size: int = 1
     """Intra-layer model parallelism. Splits tensors across GPU ranks."""

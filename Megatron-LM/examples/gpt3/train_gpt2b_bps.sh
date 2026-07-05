@@ -18,8 +18,8 @@ export NCCL_DEBUG_LEVEL=TRACE
 export CUDA_VISIBLE_DEVICES=1   # 多机单卡
 export NODE_RANK=${NODE_RANK:-0}
 
-export BYTEPS_RDMA_RX_DEPTH=${BYTEPS_RDMA_RX_DEPTH:-512}
-export BYTEPS_RDMA_START_DEPTH=${BYTEPS_RDMA_START_DEPTH:-16}
+export MEGASCALE_PS_RDMA_RX_DEPTH=${MEGASCALE_PS_RDMA_RX_DEPTH:-512}
+export MEGASCALE_PS_RDMA_START_DEPTH=${MEGASCALE_PS_RDMA_START_DEPTH:-16}
 
 export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
 export DMLC_ROLE=worker
@@ -47,10 +47,10 @@ MASTER_ADDR=${MASTER_ADDR:-192.168.1.10}
 MASTER_PORT=${MASTER_PORT:-19002}
 WORLD_SIZE=$(($GPUS_PER_NODE*$NUM_NODES))
 
-# BytePS: number of worker nodes (per host), not processes.
+# MegaScalePS: number of worker nodes (per host), not processes.
 export DMLC_NUM_WORKER=$NUM_NODES
-# BytePS: local processes per host (nproc_per_node).
-export BYTEPS_LOCAL_SIZE=$GPUS_PER_NODE
+# MegaScalePS: local processes per host (nproc_per_node).
+export MEGASCALE_PS_LOCAL_SIZE=$GPUS_PER_NODE
 
 torchrun --nproc_per_node=$GPUS_PER_NODE --nnodes=$NNODES --node_rank=$NODE_RANK \
   --master_addr=$MASTER_ADDR --master_port=$MASTER_PORT \

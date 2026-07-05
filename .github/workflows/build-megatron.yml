@@ -2,10 +2,10 @@ name: build-megatron
 
 on:
   push:
-    branches: [main, wpb_byteps]
+    branches: [main, wpb_megascale_ps]
     paths:
       - "Dockerfile.megatron"
-      - "Dockerfile.byteps"
+      - "Dockerfile.megascale_ps"
       - "Megatron-LM/**"
       - "apex/**"
       - "vocab/**"
@@ -20,8 +20,8 @@ jobs:
       contents: read
       packages: write
     env:
-      IMAGE_MEGATRON: ghcr.io/${{ github.repository_owner }}/byteps-megatron
-      IMAGE_BYTEPS: ghcr.io/${{ github.repository_owner }}/byteps
+      IMAGE_MEGATRON: ghcr.io/${{ github.repository_owner }}/megascale_ps-megatron
+      IMAGE_MEGASCALE_PS: ghcr.io/${{ github.repository_owner }}/megascale_ps
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -51,7 +51,7 @@ jobs:
           context: .
           file: ./Dockerfile.megatron
           build-args: |
-            BYTEPS_IMAGE=${{ env.IMAGE_BYTEPS }}:latest
+            MEGASCALE_PS_IMAGE=${{ env.IMAGE_MEGASCALE_PS }}:latest
           push: true
           tags: |
             ${{ env.IMAGE_MEGATRON }}:latest

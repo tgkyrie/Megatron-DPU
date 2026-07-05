@@ -35,20 +35,20 @@ def _reduce(input_, group):
 
 def _bps_reduce(input_, group, name):
     assert group is not None, "group should not be None"
-    assert name is not None, "BytePS TP reduce requires a stable op name."
+    assert name is not None, "MegaScalePS TP reduce requires a stable op name."
 
     # Bypass the function if we are using only 1 GPU.
     if group.size() == 1:
         return input_
 
     # Lazy import to avoid circular import:
-    # mappings -> distributed.byteps_collectives -> distributed.__init__ ->
+    # mappings -> distributed.megascale_ps_collectives -> distributed.__init__ ->
     # finalize_model_grads -> pipeline_parallel -> schedules ->
     # transformer.moe.router -> tensor_parallel (circular)
-    from byteps.torch import ops as bps_ops
-    from megatron.core.distributed.byteps_collectives import byteps_allreduce_async_inplace
+    from megascale_ps.torch import ops as bps_ops
+    from megatron.core.distributed.megascale_ps_collectives import megascale_ps_allreduce_async_inplace
 
-    handle = byteps_allreduce_async_inplace(
+    handle = megascale_ps_allreduce_async_inplace(
         input_,
         group=group,
         scope='tp',

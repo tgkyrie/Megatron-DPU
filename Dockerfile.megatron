@@ -1,15 +1,15 @@
-# Megatron 镜像，基于已构建的 BytePS 镜像
-ARG BYTEPS_IMAGE=byteps:fused-pushpull
-FROM ${BYTEPS_IMAGE}
+# Megatron 镜像，基于已构建的 MegaScalePS 镜像
+ARG MEGASCALE_PS_IMAGE=megascale_ps:fused-pushpull
+FROM ${MEGASCALE_PS_IMAGE}
 
-ARG BYTEPS_BASE_PATH=/usr/local
-ARG MEGA_PATH=$BYTEPS_BASE_PATH/Megatron-LM
+ARG MEGASCALE_PS_BASE_PATH=/usr/local
+ARG MEGA_PATH=$MEGASCALE_PS_BASE_PATH/Megatron-LM
 
-WORKDIR ${BYTEPS_BASE_PATH}
+WORKDIR ${MEGASCALE_PS_BASE_PATH}
 
 # Megatron 源码与 uv 脚本
-COPY ./Megatron-LM/ ${BYTEPS_BASE_PATH}/Megatron-LM/
-COPY ./uvinstall.sh ${BYTEPS_BASE_PATH}
+COPY ./Megatron-LM/ ${MEGASCALE_PS_BASE_PATH}/Megatron-LM/
+COPY ./uvinstall.sh ${MEGASCALE_PS_BASE_PATH}
 
 # 安装 uv（按 Megatron 文档）
 RUN chmod +x uvinstall.sh && ./uvinstall.sh
@@ -25,10 +25,10 @@ RUN pip install --no-build-isolation -e .
 RUN pip install "megatron-core[mlm]" -i https://mirrors.ustc.edu.cn/pypi/simple
 
 # 安装 apex 与 vocab
-RUN git clone --depth 1 https://github.com/NVIDIA/apex.git ${BYTEPS_BASE_PATH}/apex
-COPY ./vocab/ ${BYTEPS_BASE_PATH}/vocab/
+RUN git clone --depth 1 https://github.com/NVIDIA/apex.git ${MEGASCALE_PS_BASE_PATH}/apex
+COPY ./vocab/ ${MEGASCALE_PS_BASE_PATH}/vocab/
 
-WORKDIR ${BYTEPS_BASE_PATH}
+WORKDIR ${MEGASCALE_PS_BASE_PATH}
 
 # 加速点：自动使用 CPU 核数并行编译 apex（不改全局 PATH/CUDA_HOME）
 RUN cd apex && \

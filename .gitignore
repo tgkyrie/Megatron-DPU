@@ -4,8 +4,7 @@
 __pycache__/
 *.py[cod]
 .codex
-byteps/3rdparty/ps-lite/deps/
+megascale_ps/3rdparty/ps-lite/deps/
 test.md
 AGENTS.md
-docs/byteps_rdma_topology.md
 docs/benchmark_runs/

@@ -1,0 +1,375 @@
+#!/bin/bash
+
+set -euo pipefail
+
+############################################
+# Qwen3-4B TP + DP MegaScalePS validation script
+#
+# Defaults match Qwen3-4B dense:
+# layers=36, hidden=2560, ffn=9728, heads=32,
+# GQA kv heads=8, benchmark vocab=4096, RMSNorm eps=1e-6.
+############################################
+
+export NODE_RANK=${NODE_RANK:-0}
+
+export CUDA_DEVICE_MAX_CONNECTIONS=${CUDA_DEVICE_MAX_CONNECTIONS:-1}
+export CUDA_HOME=${CUDA_HOME:-/usr/local/cuda}
+export LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH:-}"
+export TORCH_EXTENSIONS_DIR=${TORCH_EXTENSIONS_DIR:-/tmp/torch_extensions_${USER:-root}}
+mkdir -p "${TORCH_EXTENSIONS_DIR}"
+
+export NCCL_DEBUG=${NCCL_DEBUG:-INFO}
+export NCCL_DEBUG_SUBSYS=${NCCL_DEBUG_SUBSYS:-COLL}
+export NCCL_DEBUG_FILE=${NCCL_DEBUG_FILE:-nccl_${HOSTNAME}_rank${NODE_RANK}.log}
+export NCCL_DEBUG_LEVEL=${NCCL_DEBUG_LEVEL:-TRACE}
+
+export USE_DPU_DP=${USE_DPU_DP:-1}
+export USE_DPU_TP=${USE_DPU_TP:-1}
+export USE_OVERLAP=${USE_OVERLAP:-1}
+export TRAIN_ITERS=${TRAIN_ITERS:-10}
+export EVAL_INTERVAL=${EVAL_INTERVAL:-100}
+export EVAL_ITERS=${EVAL_ITERS:-10}
+export SEED=${SEED:-1234}
+
+export DMLC_USE_GDR=${DMLC_USE_GDR:-0}
+export MEGASCALE_PS_RDMA_START_DEPTH=${MEGASCALE_PS_RDMA_START_DEPTH:-32}
+export MEGASCALE_PS_ENABLE_FUSED_PUSH_PULL=${MEGASCALE_PS_ENABLE_FUSED_PUSH_PULL:-1}
+export MEGASCALE_PS_SERVER_ENABLE_SCHEDULE=${MEGASCALE_PS_SERVER_ENABLE_SCHEDULE:-0}
+export DMLC_ENABLE_UCX=${DMLC_ENABLE_UCX:-1}
+if [[ "${DMLC_ENABLE_UCX}" == "1" ]]; then
+    export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-0}
+    export UCX_TLS=${UCX_TLS:-rc}
+    export UCX_RAIL_MODE=${UCX_RAIL_MODE:-dual}
+    if [[ "${UCX_RAIL_MODE}" == "single" ]]; then
+        export UCX_NET_DEVICES=${UCX_NET_DEVICES:-mlx5_1:1}
+        export UCX_MAX_EAGER_RAILS=${UCX_MAX_EAGER_RAILS:-1}
+        export UCX_MAX_RNDV_RAILS=${UCX_MAX_RNDV_RAILS:-1}
+    else
+        export UCX_NET_DEVICES=${UCX_NET_DEVICES:-mlx5_0:1,mlx5_1:1}
+        export UCX_MAX_EAGER_RAILS=${UCX_MAX_EAGER_RAILS:-2}
+        export UCX_MAX_RNDV_RAILS=${UCX_MAX_RNDV_RAILS:-2}
+    fi
+    export UCX_RNDV_THRESH=${UCX_RNDV_THRESH:-8k}
+    export UCX_IB_TRAFFIC_CLASS=${UCX_IB_TRAFFIC_CLASS:-106}
+    export PSLITE_UCX_IB_TRAFFIC_CLASS=${PSLITE_UCX_IB_TRAFFIC_CLASS:-106}
+    export UCX_WARN_UNUSED_ENV_VARS=${UCX_WARN_UNUSED_ENV_VARS:-n}
+    export PSLITE_UCX_USE_MT_MUTEX=${PSLITE_UCX_USE_MT_MUTEX:-y}
+    export PSLITE_UCX_RNDV_SCHEME=${PSLITE_UCX_RNDV_SCHEME:-put_zcopy}
+    export MEGASCALE_PS_PARTITION_BYTES=${MEGASCALE_PS_PARTITION_BYTES:-1048576}
+    export MEGASCALE_PS_ADDRESS_POOL_SIZE=${MEGASCALE_PS_ADDRESS_POOL_SIZE:-10240}
+    export MEGASCALE_PS_RDMA_RX_DEPTH=${MEGASCALE_PS_RDMA_RX_DEPTH:-512}
+else
+    export DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA:-ibverbs}
+    export MEGASCALE_PS_PARTITION_BYTES=${MEGASCALE_PS_PARTITION_BYTES:-4194304}
+    export MEGASCALE_PS_ADDRESS_POOL_SIZE=${MEGASCALE_PS_ADDRESS_POOL_SIZE:-10240}
+    export MEGASCALE_PS_RDMA_RX_DEPTH=${MEGASCALE_PS_RDMA_RX_DEPTH:-1024}
+fi
+
+export CUDA_VISIBLE_DEVICES=${CUDA_VISIBLE_DEVICES:-1}
+
+extract_primary_hca() {
+    local hca="${NCCL_IB_HCA:-}"
+    hca="${hca%%,*}"
+    hca="${hca%%:*}"
+    hca="${hca#^}"
+    hca="${hca#=}"
+    printf '%s' "${hca}"
+}
+
+detect_iface_from_hca() {
+    local hca="$1"
+    if [[ -z "${hca}" ]]; then
+        return
+    fi
+    ls "/sys/class/infiniband/${hca}/device/net" 2>/dev/null | head -n1
+}
+
+detect_ip_from_iface() {
+    local iface="$1"
+    if [[ -z "${iface}" ]]; then
+        return
+    fi
+    ip -4 -o addr show dev "${iface}" 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | head -n1
+}
+
+export NCCL_IB_HCA=${NCCL_IB_HCA:-mlx5_1}
+PRIMARY_HCA=$(extract_primary_hca)
+AUTO_DMLC_INTERFACE=$(detect_iface_from_hca "${PRIMARY_HCA}")
+export DMLC_INTERFACE=${DMLC_INTERFACE:-${AUTO_DMLC_INTERFACE:-ens39f1np1}}
+LOCAL_DETECTED_IP=$(detect_ip_from_iface "${DMLC_INTERFACE}")
+export DMLC_PS_ROOT_PORT=${DMLC_PS_ROOT_PORT:-9010}
+export DMLC_NODE_HOST=${DMLC_NODE_HOST:-${LOCAL_DETECTED_IP}}
+
+export NCCL_IB_DISABLE=${NCCL_IB_DISABLE:-0}
+export NCCL_SOCKET_IFNAME=${NCCL_SOCKET_IFNAME:-$DMLC_INTERFACE}
+export GLOO_SOCKET_IFNAME=${GLOO_SOCKET_IFNAME:-$DMLC_INTERFACE}
+
+MASTER_ADDR_VALUE=${MASTER_ADDR:-}
+DMLC_PS_ROOT_URI_VALUE=${DMLC_PS_ROOT_URI:-}
+if [[ -z "${MASTER_ADDR_VALUE}" && -n "${DMLC_PS_ROOT_URI_VALUE}" ]]; then
+    MASTER_ADDR_VALUE="${DMLC_PS_ROOT_URI_VALUE}"
+fi
+if [[ -z "${DMLC_PS_ROOT_URI_VALUE}" && -n "${MASTER_ADDR_VALUE}" ]]; then
+    DMLC_PS_ROOT_URI_VALUE="${MASTER_ADDR_VALUE}"
+fi
+if [[ -z "${MASTER_ADDR_VALUE}" ]]; then
+    if [[ "${NODE_RANK}" == "0" && -n "${LOCAL_DETECTED_IP}" ]]; then
+        MASTER_ADDR_VALUE="${LOCAL_DETECTED_IP}"
+    else
+        MASTER_ADDR_VALUE="192.168.1.10"
+    fi
+fi
+if [[ -z "${DMLC_PS_ROOT_URI_VALUE}" ]]; then
+    DMLC_PS_ROOT_URI_VALUE="${MASTER_ADDR_VALUE}"
+fi
+export MASTER_ADDR="${MASTER_ADDR_VALUE}"
+export DMLC_PS_ROOT_URI="${DMLC_PS_ROOT_URI_VALUE}"
+
+TOKENIZER_ARG=${3:-"MOCK"}
+DATA_ARG=${4:-"MOCK"}
+
+detect_numa_from_iface() {
+    cat "/sys/class/net/${DMLC_INTERFACE}/device/numa_node" 2>/dev/null || echo "-1"
+}
+
+detect_cpulist_from_iface() {
+    cat "/sys/class/net/${DMLC_INTERFACE}/device/local_cpulist" 2>/dev/null || echo ""
+}
+
+build_numactl_prefix() {
+    local node="$1"
+    local cpulist="$2"
+
+    NUMACTL_PREFIX=()
+    if ! command -v numactl >/dev/null 2>&1; then
+        return
+    fi
+
+    if [[ -n "${cpulist}" ]]; then
+        if [[ -n "${node}" && "${node}" != "-1" ]]; then
+            NUMACTL_PREFIX=(numactl --physcpubind="${cpulist}" --membind="${node}")
+        else
+            NUMACTL_PREFIX=(numactl --physcpubind="${cpulist}" --localalloc)
+        fi
+        return
+    fi
+
+    if [[ -n "${node}" && "${node}" != "-1" ]]; then
+        NUMACTL_PREFIX=(numactl --cpunodebind="${node}" --membind="${node}")
+    fi
+}
+
+NUMA_NODE=${NUMA_NODE:-$(detect_numa_from_iface)}
+CPU_LIST=${CPU_LIST:-$(detect_cpulist_from_iface)}
+NUMACTL_PREFIX=()
+build_numactl_prefix "${NUMA_NODE}" "${CPU_LIST}"
+
+GPUS_PER_NODE=${GPUS_PER_NODE:-1}
+NUM_NODES=${NUM_NODES:-8}
+MASTER_PORT=${MASTER_PORT:-19002}
+WORLD_SIZE=$((GPUS_PER_NODE * NUM_NODES))
+
+export DMLC_NUM_WORKER=${DMLC_NUM_WORKER:-$NUM_NODES}
+export DMLC_NUM_SERVER=${DMLC_NUM_SERVER:-$NUM_NODES}
+export MEGASCALE_PS_LOCAL_SIZE=${MEGASCALE_PS_LOCAL_SIZE:-$GPUS_PER_NODE}
+
+PRETRAIN_SCRIPT_PATH="pretrain_gpt.py"
+
+TP_SIZE=${TP_SIZE:-2}
+CP_SIZE=${CP_SIZE:-1}
+PP_SIZE=${PP_SIZE:-1}
+
+if [[ "${CP_SIZE}" -ne 1 || "${PP_SIZE}" -ne 1 ]]; then
+    echo "[error] This script expects CP_SIZE=1 and PP_SIZE=1."
+    exit 1
+fi
+
+if (( WORLD_SIZE % TP_SIZE != 0 )); then
+    echo "[error] WORLD_SIZE must be divisible by TP_SIZE."
+    echo "        WORLD_SIZE=${WORLD_SIZE}, TP_SIZE=${TP_SIZE}"
+    exit 1
+fi
+
+DP_SIZE=$((WORLD_SIZE / TP_SIZE))
+
+MICRO_BATCH_SIZE=${MICRO_BATCH_SIZE:-1}
+GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE:-$((MICRO_BATCH_SIZE * DP_SIZE))}
+
+NUM_LAYERS=${NUM_LAYERS:-36}
+HIDDEN_SIZE=${HIDDEN_SIZE:-2560}
+NUM_HEADS=${NUM_HEADS:-32}
+FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE:-9728}
+KV_CHANNELS=${KV_CHANNELS:-128}
+NUM_QUERY_GROUPS=${NUM_QUERY_GROUPS:-8}
+
+SEQ_LENGTH=${SEQ_LENGTH:-256}
+MAX_POSITION_EMBEDDINGS=${MAX_POSITION_EMBEDDINGS:-40960}
+VOCAB_SIZE=${VOCAB_SIZE:-4096}
+MAKE_VOCAB_SIZE_DIVISIBLE_BY=${MAKE_VOCAB_SIZE_DIVISIBLE_BY:-128}
+NORMALIZATION=${NORMALIZATION:-RMSNorm}
+NORM_EPSILON=${NORM_EPSILON:-1e-6}
+ROTARY_BASE=${ROTARY_BASE:-1000000}
+ROTARY_PERCENT=${ROTARY_PERCENT:-1.0}
+ACTIVATION=${ACTIVATION:-swiglu}
+UNTIE_EMBEDDINGS=${UNTIE_EMBEDDINGS:-0}
+APPLY_LAYERNORM_1P=${APPLY_LAYERNORM_1P:-0}
+DISABLE_BIAS_LINEAR=${DISABLE_BIAS_LINEAR:-1}
+DTYPE=${DTYPE:-fp32}
+MODEL_NAME=${MODEL_NAME:-qwen3_4b}
+
+DATA_CACHE_PATH="${PWD}/benchmark_cache_${MODEL_NAME}_tp_dp_megascale_ps"
+mkdir -p "$DATA_CACHE_PATH"
+
+DISTRIBUTED_ARGS=(
+    --nproc_per_node "$GPUS_PER_NODE"
+    --nnodes "$NUM_NODES"
+    --node_rank "$NODE_RANK"
+    --master_addr "$MASTER_ADDR"
+    --master_port "$MASTER_PORT"
+    --no_python
+)
+
+MODEL_ARGS=(
+    --transformer-impl local
+    --use-mcore-models
+    --no-persist-layer-norm
+    --recompute-activations
+    --num-layers "$NUM_LAYERS"
+    --hidden-size "$HIDDEN_SIZE"
+    --ffn-hidden-size "$FFN_HIDDEN_SIZE"
+    --num-attention-heads "$NUM_HEADS"
+    --kv-channels "$KV_CHANNELS"
+    --seq-length "$SEQ_LENGTH"
+    --max-position-embeddings "$MAX_POSITION_EMBEDDINGS"
+    --make-vocab-size-divisible-by "$MAKE_VOCAB_SIZE_DIVISIBLE_BY"
+    --position-embedding-type rope
+    --rotary-base "$ROTARY_BASE"
+    --rotary-percent "$ROTARY_PERCENT"
+    --normalization "$NORMALIZATION"
+    --norm-epsilon "$NORM_EPSILON"
+    --attention-dropout 0.0
+    --hidden-dropout 0.0
+    --attention-backend fused
+    --init-method-std 0.02
+    --log-interval 1
+    --train-iters "$TRAIN_ITERS"
+    --seed "$SEED"
+    --no-rope-fusion
+    --tensor-model-parallel-size "$TP_SIZE"
+    --context-parallel-size "$CP_SIZE"
+)
+
+case "$ACTIVATION" in
+    swiglu)
+        MODEL_ARGS+=(--swiglu)
+        ;;
+    squared_relu|squared-relu)
+        MODEL_ARGS+=(--squared-relu)
+        ;;
+    gelu)
+        ;;
+    *)
+        echo "[error] Unsupported ACTIVATION=${ACTIVATION}; expected swiglu, squared_relu, or gelu."
+        exit 1
+        ;;
+esac
+
+if [[ "${DISABLE_BIAS_LINEAR}" == "1" ]]; then
+    MODEL_ARGS+=(--disable-bias-linear)
+fi
+
+if [[ "${NUM_QUERY_GROUPS}" -gt 0 && "${NUM_QUERY_GROUPS}" -ne "${NUM_HEADS}" ]]; then
+    MODEL_ARGS+=(--group-query-attention --num-query-groups "$NUM_QUERY_GROUPS")
+fi
+
+if [[ "${APPLY_LAYERNORM_1P}" == "1" ]]; then
+    MODEL_ARGS+=(--apply-layernorm-1p)
+fi
+
+if [[ "${UNTIE_EMBEDDINGS}" == "1" ]]; then
+    MODEL_ARGS+=(--untie-embeddings-and-output-weights)
+fi
+
+if [[ "${USE_DPU_DP}" == "1" ]]; then
+    MODEL_ARGS+=(--use-dpu-reduce)
+fi
+
+if [[ "${USE_DPU_TP}" == "1" ]]; then
+    MODEL_ARGS+=(--use-dpu-tp-reduce)
+fi
+
+TRAINING_ARGS=(
+    --micro-batch-size "$MICRO_BATCH_SIZE"
+    --global-batch-size "$GLOBAL_BATCH_SIZE"
+    --lr 3.0e-4
+    --min-lr 3.0e-5
+    --lr-decay-style cosine
+    --weight-decay 0.1
+    --clip-grad 1.0
+    --adam-beta1 0.9
+    --adam-beta2 0.95
+    --cross-entropy-loss-fusion
+    --calculate-per-token-loss
+    --manual-gc
+    --empty-unused-memory-level 1
+    --exit-duration-in-mins 235
+)
+
+if [[ "${USE_OVERLAP}" == "1" ]]; then
+    TRAINING_ARGS+=(--overlap-grad-reduce)
+fi
+
+DTYPE_ARGS=()
+if [[ "$DTYPE" == "fp8" ]]; then
+    DTYPE_ARGS+=(--fp8-format hybrid --fp8-amax-history-len 1024 --fp8-amax-compute-algo max)
+elif [[ "$DTYPE" == "bf16" ]]; then
+    DTYPE_ARGS+=(--bf16)
+fi
+
+DATA_ARGS_LIST=()
+if [[ "$TOKENIZER_ARG" == "MOCK" ]] || [[ "$DATA_ARG" == "MOCK" ]]; then
+    DATA_ARGS_LIST+=(--mock-data --tokenizer-type NullTokenizer --vocab-size "$VOCAB_SIZE" --split '99,1,0' --no-mmap-bin-files --num-workers 1)
+else
+    DATA_ARGS_LIST+=(--data-path "$DATA_ARG" --tokenizer-type HuggingFaceTokenizer --tokenizer-model "$TOKENIZER_ARG" --vocab-size "$VOCAB_SIZE" --data-cache-path "$DATA_CACHE_PATH" --split '99,1,0' --no-mmap-bin-files --num-workers 1)
+fi
+
+EVAL_AND_LOGGING_ARGS=(
+    --eval-iters "$EVAL_ITERS"
+    --eval-interval "$EVAL_INTERVAL"
+    --log-throughput
+    --distributed-timeout-minutes 60
+    --timing-log-level 1
+)
+
+CMD=(python "$PRETRAIN_SCRIPT_PATH" "${MODEL_ARGS[@]}" "${TRAINING_ARGS[@]}" "${DTYPE_ARGS[@]}" "${DATA_ARGS_LIST[@]}" "${EVAL_AND_LOGGING_ARGS[@]}")
+
+echo "[net] HCA=${PRIMARY_HCA:-unset} IF=${DMLC_INTERFACE} LOCAL_IP=${LOCAL_DETECTED_IP:-unset} MASTER_ADDR=${MASTER_ADDR} ROOT=${DMLC_PS_ROOT_URI}"
+echo "[parallel] WORLD_SIZE=${WORLD_SIZE} TP_SIZE=${TP_SIZE} DP_SIZE=${DP_SIZE} PP_SIZE=${PP_SIZE} CP_SIZE=${CP_SIZE}"
+echo "[megascale_ps] USE_DPU_DP=${USE_DPU_DP} USE_DPU_TP=${USE_DPU_TP} DMLC_NUM_WORKER=${DMLC_NUM_WORKER} DMLC_NUM_SERVER=${DMLC_NUM_SERVER}"
+echo "[megascale_ps-net] DMLC_ENABLE_UCX=${DMLC_ENABLE_UCX} DMLC_ENABLE_RDMA=${DMLC_ENABLE_RDMA} DMLC_USE_GDR=${DMLC_USE_GDR} MEGASCALE_PS_ENABLE_FUSED_PUSH_PULL=${MEGASCALE_PS_ENABLE_FUSED_PUSH_PULL} MEGASCALE_PS_PARTITION_BYTES=${MEGASCALE_PS_PARTITION_BYTES} MEGASCALE_PS_ADDRESS_POOL_SIZE=${MEGASCALE_PS_ADDRESS_POOL_SIZE} MEGASCALE_PS_RDMA_RX_DEPTH=${MEGASCALE_PS_RDMA_RX_DEPTH} MEGASCALE_PS_RDMA_START_DEPTH=${MEGASCALE_PS_RDMA_START_DEPTH} MEGASCALE_PS_SERVER_ENABLE_SCHEDULE=${MEGASCALE_PS_SERVER_ENABLE_SCHEDULE:-unset}"
+echo "[model] MODEL_NAME=${MODEL_NAME} NUM_LAYERS=${NUM_LAYERS} HIDDEN_SIZE=${HIDDEN_SIZE} FFN_HIDDEN_SIZE=${FFN_HIDDEN_SIZE} NUM_HEADS=${NUM_HEADS} NUM_QUERY_GROUPS=${NUM_QUERY_GROUPS} KV_CHANNELS=${KV_CHANNELS} VOCAB_SIZE=${VOCAB_SIZE} MAKE_VOCAB_SIZE_DIVISIBLE_BY=${MAKE_VOCAB_SIZE_DIVISIBLE_BY}"
+echo "[model] SEQ_LENGTH=${SEQ_LENGTH} MAX_POSITION_EMBEDDINGS=${MAX_POSITION_EMBEDDINGS} NORMALIZATION=${NORMALIZATION} NORM_EPSILON=${NORM_EPSILON} ROTARY_BASE=${ROTARY_BASE} ROTARY_PERCENT=${ROTARY_PERCENT} ACTIVATION=${ACTIVATION} UNTIE_EMBEDDINGS=${UNTIE_EMBEDDINGS} DISABLE_BIAS_LINEAR=${DISABLE_BIAS_LINEAR}"
+echo "[overlap] USE_OVERLAP=${USE_OVERLAP}"
+echo "[batch] MICRO_BATCH_SIZE=${MICRO_BATCH_SIZE} GLOBAL_BATCH_SIZE=${GLOBAL_BATCH_SIZE}"
+echo "[run] TRAIN_ITERS=${TRAIN_ITERS} EVAL_INTERVAL=${EVAL_INTERVAL} EVAL_ITERS=${EVAL_ITERS} SEED=${SEED}"
+echo "[numa] NUMA_NODE=${NUMA_NODE} CPU_LIST='${CPU_LIST}' IF=${DMLC_INTERFACE} HOST=${DMLC_NODE_HOST}"
+
+"${NUMACTL_PREFIX[@]}" torchrun "${DISTRIBUTED_ARGS[@]}" bash -c '
+export DMLC_ROLE=worker
+export DMLC_NUM_WORKER='"$DMLC_NUM_WORKER"'
+export DMLC_NUM_SERVER='"$DMLC_NUM_SERVER"'
+export DMLC_PS_ROOT_URI='"$DMLC_PS_ROOT_URI"'
+export DMLC_PS_ROOT_PORT='"$DMLC_PS_ROOT_PORT"'
+export DMLC_NODE_HOST='"$DMLC_NODE_HOST"'
+export MEGASCALE_PS_LOCAL_SIZE='"$MEGASCALE_PS_LOCAL_SIZE"'
+export MEGASCALE_PS_LOCAL_RANK="$LOCAL_RANK"
+export DMLC_WORKER_ID="$NODE_RANK"
+
+echo "[tp-dp-megascale_ps] NODE_RANK='"$NODE_RANK"' RANK=${RANK:-unset} LOCAL_RANK=$LOCAL_RANK CUDA_VISIBLE_DEVICES=$CUDA_VISIBLE_DEVICES"
+echo "[tp-dp-megascale_ps] MASTER_ADDR='"$MASTER_ADDR"' MASTER_PORT='"$MASTER_PORT"'"
+echo "[tp-dp-megascale_ps] DMLC_NODE_HOST=$DMLC_NODE_HOST DMLC_PS_ROOT_URI=$DMLC_PS_ROOT_URI DMLC_PS_ROOT_PORT=$DMLC_PS_ROOT_PORT"
+echo "[tp-dp-megascale_ps] DMLC_NUM_WORKER=$DMLC_NUM_WORKER MEGASCALE_PS_LOCAL_SIZE=$MEGASCALE_PS_LOCAL_SIZE MEGASCALE_PS_LOCAL_RANK=$MEGASCALE_PS_LOCAL_RANK DMLC_WORKER_ID=$DMLC_WORKER_ID"
+echo "[tp-dp-megascale_ps] TP_SIZE='"$TP_SIZE"' DP_SIZE='"$DP_SIZE"' USE_DPU_DP='"$USE_DPU_DP"' USE_DPU_TP='"$USE_DPU_TP"'"
+
+exec "$@"
+' bash "${CMD[@]}"
